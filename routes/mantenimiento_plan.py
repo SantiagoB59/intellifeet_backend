@@ -236,34 +236,7 @@ def get_plan_items():
         activo=True
     ).all()
 
-    return jsonify([{
-
-        "id": i.id,
-
-        "sistema": i.sistema,
-
-        "nombre": i.nombre,
-
-        "descripcion": i.descripcion,
-
-        "tipo_mantenimiento": (
-            i.tipo_mantenimiento
-        ),
-
-        "tipo_control": (
-            i.tipo_control
-        ),
-
-        "frecuencia_valor": (
-            i.frecuencia_valor
-        ),
-
-        "alerta_valor": (
-            i.alerta_valor
-        ),
-
-        "obligatorio": (
-            i.obligatorio
-        )
-
-    } for i in items])
+    return jsonify([
+        i.to_dict()
+        for i in items
+    ])

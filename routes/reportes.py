@@ -310,7 +310,7 @@ def exportar_alertas_excel():
 
     ws.merge_cells('A1:G1')
 
-    ws['A1'] = 'TRANSMENA Y CARGA SAS'
+    ws['A1'] = 'REPORTE CORPORATIVO DE ALERTAS INTELLIFEET'
 
     ws['A1'].font = title_font
     ws['A1'].fill = title_fill
@@ -879,7 +879,7 @@ def exportar_formato_mantenimiento(vehiculo_id):
             cell.fill = azul_oscuro
             cell.border = border
 
-    logo = Image('static/logo_transmena.jpg')
+    logo = Image('static/intellifeet.png')
 
     logo.width = 260
     logo.height = 128
@@ -1545,7 +1545,7 @@ def exportar_formato_alertas(vehiculo_id):
             cell.fill = azul_oscuro
             cell.border = border
 
-    logo = Image('static/logo_transmena.jpg')
+    logo = Image('static/intellifeet.png')
     logo.width = 260
     logo.height = 128
     ws.add_image(logo, 'A1')

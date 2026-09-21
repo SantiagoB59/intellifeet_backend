@@ -15,7 +15,7 @@ def test_email():
 
         subject='Prueba de correo',
 
-        recipients=['transmenasmart@gmail.com']
+        recipients=['ferney.bonilla59@gmail.com']
     )
 
     msg.body = 'Hola mundo desde Flask 🚀'

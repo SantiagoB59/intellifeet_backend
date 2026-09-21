@@ -12,13 +12,17 @@ from models import (
     MaquinariaPlanItem
 )
 from models import Alerta
-
+from datetime import date
 from sqlalchemy import desc
 
 from datetime import datetime
 from sockets.socket_handler import socketio
 import os
 import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+datetime.now(ZoneInfo("America/Bogota"))
 
 mantenimientos_bp = Blueprint('mantenimientos', __name__)
 
@@ -339,7 +343,7 @@ def crear():
     for alerta in alertas:
 
         alerta.estado = 'RESUELTA'
-        alerta.fecha_resolucion = datetime.utcnow()
+        alerta.fecha_resolucion = datetime.now(ZoneInfo("America/Bogota"))
         alerta.mantenimiento_id = mantenimiento.id
 
     db.session.commit()
@@ -525,12 +529,16 @@ def plan_por_maquinaria(maquinaria_id):
 # ==========================
 # CREAR MANTENIMIENTO MAQUINARIA
 # ==========================
+# =========================================
+# CREAR MANTENIMIENTO DE MAQUINARIA
+# =========================================
 @mantenimientos_bp.route('/maquinaria', methods=['POST'])
 def crear_maquinaria():
 
     # =====================================
     # FORM DATA
     # =====================================
+
     maquinaria_id = request.form.get(
         'maquinaria_id',
         type=int
@@ -546,13 +554,20 @@ def crear_maquinaria():
         type=int
     )
 
+    horas_programadas = request.form.get(
+        'horas_programadas',
+        type=int
+    )
+
     fecha = request.form.get('fecha')
 
     tipo = request.form.get('tipo')
 
     proveedor = request.form.get('proveedor')
 
-    observaciones = request.form.get('observaciones')
+    observaciones = request.form.get(
+        'observaciones'
+    )
 
     costo = request.form.get(
         'costo',
@@ -561,11 +576,14 @@ def crear_maquinaria():
 
     lugar = request.form.get('lugar')
 
-    responsable = request.form.get('responsable')
+    responsable = request.form.get(
+        'responsable'
+    )
 
     # =====================================
     # VALIDACIONES
     # =====================================
+
     if not maquinaria_id:
 
         return jsonify({
@@ -581,30 +599,116 @@ def crear_maquinaria():
     # =====================================
     # MAQUINARIA
     # =====================================
+
     maquinaria = Maquinaria.query.get_or_404(
         maquinaria_id
     )
 
     if horas is None:
-        horas = maquinaria.horometro_actual
+
+        horas = int(
+            maquinaria.horometro_actual or 0
+        )
 
     # =====================================
     # PLAN
     # =====================================
+
     mpi = MaquinariaPlanItem.query.get_or_404(
         maquinaria_plan_item_id
     )
 
     # =====================================
+    # VALIDAR QUE EL PLAN PERTENEZCA
+    # A LA MAQUINARIA
+    # =====================================
+
+    if mpi.maquinaria_id != maquinaria.id:
+
+        return jsonify({
+            "error": (
+                "El plan de mantenimiento "
+                "no pertenece a esta maquinaria"
+            )
+        }), 400
+
+    # =====================================
+    # DETERMINAR OCURRENCIA
+    # =====================================
+
+    ocurrencias = mpi.calcular_ocurrencias()
+
+    realizadas = {
+        m.horas_programadas
+        for m in MaquinariaMantenimiento.query.filter_by(
+            maquinaria_id=maquinaria.id,
+            maquinaria_plan_item_id=mpi.id,
+            completado=True
+        ).all()
+        if m.horas_programadas is not None
+    }
+
+    pendientes = [
+        h
+        for h in ocurrencias
+        if h not in realizadas
+    ]
+
+    # =====================================
+    # SI NO VIENE DESDE FRONTEND,
+    # TOMAR LA PRIMERA PENDIENTE
+    # =====================================
+
+    if horas_programadas is None:
+
+        if pendientes:
+
+            horas_programadas = pendientes[0]
+
+        else:
+
+            # Puede ser un mantenimiento manual
+            # que todavía no tenga una ocurrencia
+            # generada.
+
+            horas_programadas = None
+
+    # =====================================
+    # VALIDAR OCURRENCIA
+    # =====================================
+
+    if horas_programadas is not None:
+
+        if horas_programadas not in ocurrencias:
+
+            return jsonify({
+                "error": (
+                    "La hora programada no corresponde "
+                    "a una ocurrencia válida del plan"
+                )
+            }), 400
+
+        if horas_programadas in realizadas:
+
+            return jsonify({
+                "error": (
+                    "Esta ocurrencia ya fue completada"
+                )
+            }), 409
+
+    # =====================================
     # SUBIR SOPORTE
     # =====================================
+
     soporte_path = None
 
     if 'soporte' in request.files:
 
         file = request.files['soporte']
 
-        if file and allowed_file(file.filename):
+        if file and allowed_file(
+            file.filename
+        ):
 
             os.makedirs(
                 UPLOAD_FOLDER,
@@ -617,7 +721,9 @@ def crear_maquinaria():
                 .lower()
             )
 
-            filename = f"{uuid.uuid4()}.{extension}"
+            filename = (
+                f"{uuid.uuid4()}.{extension}"
+            )
 
             filepath = os.path.join(
                 UPLOAD_FOLDER,
@@ -633,6 +739,7 @@ def crear_maquinaria():
     # =====================================
     # CREAR MANTENIMIENTO
     # =====================================
+
     mantenimiento = MaquinariaMantenimiento(
 
         maquinaria_id=maquinaria.id,
@@ -641,112 +748,149 @@ def crear_maquinaria():
 
         plan_item_id=mpi.plan_item_id,
 
-        fecha=datetime.strptime(
-            fecha,
-            "%Y-%m-%d"
-        ).date() if fecha else None,
+        fecha=(
+            datetime.strptime(
+                fecha,
+                "%Y-%m-%d"
+            ).date()
+            if fecha
+            else date.today()
+        ),
 
+        # Horas reales de ejecución
         horas=horas,
 
-        tipo=tipo,
+        # Horas programadas de la ocurrencia
+        horas_programadas=horas_programadas,
+
+        tipo=(
+            tipo
+            if tipo
+            else (
+                mpi.plan_item.tipo
+                if mpi.plan_item
+                else None
+            )
+        ),
 
         proveedor=proveedor,
 
         observaciones=observaciones,
 
         soporte=soporte_path,
+
         costo=costo,
 
         lugar=lugar,
 
         responsable=responsable,
-        
+
         completado=True
     )
 
     db.session.add(mantenimiento)
 
     # =====================================
-    # ACTUALIZAR PLAN
+    # ACTUALIZAR ÚLTIMA EJECUCIÓN
     # =====================================
+
     mpi.ultima_horas = horas
-    mpi.ultima_fecha = mantenimiento.fecha
-    maquinaria.horometro_actual = horas
-    
+
+    mpi.ultima_fecha = (
+        mantenimiento.fecha
+    )
+
     # =====================================
-# RESOLVER ALERTAS DEL ITEM EJECUTADO
-# =====================================
-    alertas = Alerta.query.filter(
-        Alerta.tipo == "MANTENIMIENTO",
-        Alerta.estado == "ACTIVA",
-        Alerta.maquinaria_plan_item_id == mpi.id
-    ).all()
+    # ACTUALIZAR HORÓMETRO
+    # =====================================
 
-    for alerta in alertas:
+    maquinaria.horometro_actual = horas
 
-        alerta.estado = "RESUELTA"
-        alerta.fecha_resolucion = datetime.utcnow()
-        alerta.maquinaria_mantenimiento_id = mantenimiento.id
+    # =====================================
+    # GUARDAR
+    # =====================================
+
+    db.session.flush()
+
+    # =====================================
+    # RESOLVER ALERTA DE LA OCURRENCIA
+    # =====================================
+
+    alertas = []
+
+    if horas_programadas is not None:
+
+        alertas = Alerta.query.filter(
+            Alerta.tipo == "MANTENIMIENTO",
+            Alerta.estado == "ACTIVA",
+            Alerta.maquinaria_plan_item_id == mpi.id
+        ).all()
+
+        for alerta in alertas:
+
+            metadata = (
+                alerta.metadata_json
+                or {}
+            )
+
+            alerta_horas_programadas = (
+                metadata.get(
+                    "horas_programadas"
+                )
+            )
+
+            # Resolver solamente la alerta
+            # correspondiente a esta ocurrencia.
+            if (
+                alerta_horas_programadas
+                is not None
+                and int(
+                    alerta_horas_programadas
+                ) == horas_programadas
+            ):
+
+                alerta.estado = "RESUELTA"
+
+                alerta.fecha_resolucion = (
+                    datetime.now(
+                        ZoneInfo("America/Bogota")
+                    )
+                )
+
+                alerta.maquinaria_mantenimiento_id = (
+                    mantenimiento.id
+                )
+
+    # =====================================
+    # COMMIT
+    # =====================================
 
     db.session.commit()
 
-# =====================================
-# SOCKET TIEMPO REAL
-# =====================================
+    # =====================================
+    # SOCKET TIEMPO REAL
+    # =====================================
+
     for alerta in alertas:
 
-        socketio.emit(
-            "alerta_resuelta",
-            alerta.to_dict()
-        )
+        if alerta.estado == "RESUELTA":
+
+            socketio.emit(
+                "alerta_resuelta",
+                alerta.to_dict()
+            )
+
+    # =====================================
+    # RESPUESTA
+    # =====================================
+
     return jsonify(
         mantenimiento.to_dict()
     ), 201
-    
-    
-    # ==========================
-# MAQUINARIAS SIMPLE
-# ==========================
-@mantenimientos_bp.route(
-    '/maquinarias-simple',
-    methods=['GET']
-)
-def maquinarias_simple():
 
-    maquinarias = (
-        Maquinaria.query
-        .filter_by(activo=True)
-        .all()
-    )
 
-    return jsonify([
-        {
-            "id": m.id,
-            "codigo": m.codigo,
 
-            "tipo": (
-                m.tipo_maquinaria.nombre
-                if m.tipo_maquinaria
-                else None
-            ),
 
-            "marca": m.marca,
-            "modelo": m.modelo,
-
-            "horometro_actual": (
-                m.horometro_actual or 0
-            ),
-
-            "operador": m.operador,
-
-            "estado": m.estado,
-
-            "gps_id": m.gps_id
-        }
-        for m in maquinarias
-    ])
-    
-    
 # ==========================
 # LISTAR MANTENIMIENTOS MAQUINARIA
 # ==========================
@@ -809,23 +953,34 @@ def listar_maquinaria():
     
     
 # ==========================
-# OBTENER MANTENIMIENTO MAQUINARIA
+# OBTENER MAQUINARIA
 # ==========================
+
 @mantenimientos_bp.route(
     '/maquinaria/<int:id>',
     methods=['GET']
 )
 def obtener_maquinaria(id):
 
-    mantenimiento = (
-        MaquinariaMantenimiento.query
-        .get_or_404(id)
+    maquinaria = Maquinaria.query.get_or_404(id)
+
+    data = maquinaria.to_dict()
+
+    mantenimientos = (
+        MaquinariaPlanItem.query
+        .filter_by(
+            maquinaria_id=maquinaria.id,
+            activo=True
+        )
+        .all()
     )
 
-    return jsonify(
+    data["mantenimientos_programados"] = [
         mantenimiento.to_dict()
-    )
-    
+        for mantenimiento in mantenimientos
+    ]
+
+    return jsonify(data), 200
     
 # ==========================
 # ACTUALIZAR MANTENIMIENTO MAQUINARIA

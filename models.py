@@ -1,6 +1,11 @@
 from extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from decimal import Decimal
+
 # from models.alerta import Alerta
 # ==========================
 # ROLES
@@ -206,6 +211,12 @@ class Vehiculo(db.Model):
         lazy=True,
         cascade='all, delete-orphan'
     )
+    # Inspecciones preoperacionales
+    inspecciones_preoperacionales = db.relationship(
+        "Inspeccion",
+        back_populates="vehiculo",
+        lazy=True
+    )
 
     # ==========================
     # 🚗 KM TOTAL
@@ -385,8 +396,6 @@ class VehiculoDocumento(db.Model):
         }
 
 
-# ==========================
-# PLANES
 class PlanItem(db.Model):
     __tablename__ = 'plan_items'
 
@@ -395,16 +404,42 @@ class PlanItem(db.Model):
     # ==========================
     # INFORMACIÓN DEL ITEM
     # ==========================
-    sistema = db.Column(db.String(100), nullable=False)
-    nombre = db.Column(db.String(150), nullable=False)
-    descripcion = db.Column(db.Text)
+    sistema = db.Column(
+        db.String(100),
+        nullable=False
+    )
+
+    nombre = db.Column(
+        db.String(150),
+        nullable=False
+    )
+
+    descripcion = db.Column(
+        db.Text
+    )
 
     # ==========================
     # TIPO DE MANTENIMIENTO
     # ==========================
     tipo_mantenimiento = db.Column(
-        db.Enum('PREVENTIVO', 'INSPECCION', 'CORRECTIVO'),
+        db.Enum(
+            'PREVENTIVO',
+            'INSPECCION',
+            'CORRECTIVO'
+        ),
         default='PREVENTIVO',
+        nullable=False
+    )
+
+    # ==========================
+    # TIPO DE ACTIVO
+    # ==========================
+    tipo_activo = db.Column(
+        db.Enum(
+            'VEHICULO',
+            'MAQUINARIA'
+        ),
+        default='VEHICULO',
         nullable=False
     )
 
@@ -412,44 +447,100 @@ class PlanItem(db.Model):
     # CONTROL DEL MANTENIMIENTO
     # ==========================
     tipo_control = db.Column(
-        db.Enum('KM', 'DIAS', 'HORAS', 'OCASIONAL'),
+        db.Enum(
+            'KM',
+            'DIAS',
+            'HORAS',
+            'OCASIONAL'
+        ),
         default='KM',
         nullable=False
     )
 
-    frecuencia_valor = db.Column(db.Integer)
-    alerta_valor = db.Column(db.Integer)
+    frecuencia_valor = db.Column(
+        db.Integer
+    )
+
+    alerta_valor = db.Column(
+        db.Integer
+    )
 
     # ==========================
     # CONFIGURACIÓN
     # ==========================
-    obligatorio = db.Column(db.Boolean, default=True)
-    activo = db.Column(db.Boolean, default=True)
+    obligatorio = db.Column(
+        db.Boolean,
+        default=True
+    )
 
-    created_at = db.Column(db.DateTime, server_default=db.func.now())
+    activo = db.Column(
+        db.Boolean,
+        default=True
+    )
+
+    created_at = db.Column(
+        db.DateTime,
+        server_default=db.func.now()
+    )
+
+    # ==========================
+    # ACTIVIDADES
+    # ==========================
+    actividades = db.relationship(
+        'PlanItemActividad',
+        back_populates='plan_item',
+        cascade='all, delete-orphan',
+        order_by='PlanItemActividad.orden'
+    )
 
     # ==========================
     # SERIALIZACIÓN
     # ==========================
     def to_dict(self):
+
         return {
+
             "id": self.id,
 
             "sistema": self.sistema,
+
             "nombre": self.nombre,
+
             "descripcion": self.descripcion,
 
-            "tipo_mantenimiento": self.tipo_mantenimiento,
-            "tipo_control": self.tipo_control,
+            "tipo_mantenimiento":
+                self.tipo_mantenimiento,
 
-            "frecuencia_valor": self.frecuencia_valor,
-            "alerta_valor": self.alerta_valor,
+            "tipo_activo":
+                self.tipo_activo,
 
-            "obligatorio": self.obligatorio,
-            "activo": self.activo,
+            "tipo_control":
+                self.tipo_control,
 
-            "created_at": str(self.created_at) if self.created_at else None
-        }    
+            "frecuencia_valor":
+                self.frecuencia_valor,
+
+            "alerta_valor":
+                self.alerta_valor,
+
+            "obligatorio":
+                self.obligatorio,
+
+            "activo":
+                self.activo,
+
+            "actividades": [
+                actividad.to_dict()
+                for actividad in self.actividades
+                if actividad.activo
+            ],
+
+            "created_at": (
+                str(self.created_at)
+                if self.created_at
+                else None
+            )
+        }
 
 class VehiculoPlanItem(db.Model):
     __tablename__ = 'vehiculo_plan_item'
@@ -827,12 +918,12 @@ class Mantenimiento(db.Model):
     # ==========================
     created_at = db.Column(
         db.DateTime,
-        default=datetime.utcnow
+        default=lambda: datetime.now(ZoneInfo("America/Bogota"))
     )
 
     updated_at = db.Column(
         db.DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(ZoneInfo("America/Bogota")),
         onupdate=datetime.utcnow
     )
 
@@ -1022,7 +1113,7 @@ class VehiculoUbicacionActual(db.Model):
     evento = db.Column(db.String(100))
 
     fecha_gps = db.Column(db.DateTime)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(ZoneInfo("America/Bogota")), onupdate=datetime.utcnow)
     
     
 class VehiculoTracking(db.Model):
@@ -1047,7 +1138,7 @@ class VehiculoTracking(db.Model):
 
     fecha_gps = db.Column(db.DateTime)
     odometro = db.Column(db.Float)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(ZoneInfo("America/Bogota")))
     
 
 
@@ -1082,30 +1173,39 @@ class Maquinaria(db.Model):
 
     horometro_actual = db.Column(db.Float, default=0)
 
-    operador = db.Column(db.String(100))  # 🔥 importante si lo usas en front
-
+    operador = db.Column(db.String(100))
     gps_id = db.Column(db.String(50))
-
     estado = db.Column(db.String(20), default="OPERATIVA")
-
     notas = db.Column(db.Text)
-
     foto_url = db.Column(db.String(255))
-
     activo = db.Column(db.Boolean, default=True)
 
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
-    # ==========================
-    # 📋 INSPECCIONES MENSUALES
-    # ==========================
+    # INSPECCIONES
     inspecciones = db.relationship(
         'InspeccionMensual',
         backref='maquinaria',
         lazy=True,
         cascade='all, delete-orphan'
     )
-    
+
+    inspecciones_preoperacionales = db.relationship(
+        "Inspeccion",
+        back_populates="maquinaria",
+        lazy=True
+    )
+
+    # ==========================================
+    # MANTENIMIENTOS PROGRAMADOS
+    # ==========================================
+    mantenimientos_programados = db.relationship(
+        'MaquinariaPlanItem',
+        back_populates='maquinaria',
+        lazy=True,
+        cascade='all, delete-orphan'
+    )
+
     def to_dict(self):
         return {
             "id": self.id,
@@ -1157,7 +1257,45 @@ class MaquinariaDocumento(db.Model):
             "archivo_url": self.archivo_url
         }
 
+class MaquinariaHoras(db.Model):
+    __tablename__ = "maquinaria_horas"
 
+    id = db.Column(db.Integer, primary_key=True)
+
+    maquinaria_id = db.Column(
+        db.Integer,
+        db.ForeignKey("maquinaria.id"),
+        nullable=False
+    )
+
+    horas = db.Column(
+        db.Numeric(12, 2),
+        nullable=False
+    )
+
+    fecha = db.Column(
+        db.DateTime,
+        nullable=False,
+        server_default=db.func.current_timestamp()
+    )
+
+    origen = db.Column(
+        db.Enum(
+            "MANUAL",
+            "MANTENIMIENTO",
+            "PREOPERACIONAL"
+        ),
+        nullable=False,
+        default="MANUAL"
+    )
+
+    maquinaria = db.relationship(
+        "Maquinaria",
+        backref=db.backref(
+            "historial_horas",
+            lazy=True
+        )
+    )
 # ==========================
 # MAQUINARIA PLAN ITEM
 # ==========================
@@ -1182,7 +1320,7 @@ class MaquinariaPlanItem(db.Model):
     frecuencia_horas = db.Column(db.Integer)
 
     alerta_horas = db.Column(db.Integer, default=20)
-
+    horas_base = db.Column(db.Integer, default=0)
     ultima_horas = db.Column(db.Integer, default=0)
 
     ultima_fecha = db.Column(db.Date)
@@ -1192,19 +1330,74 @@ class MaquinariaPlanItem(db.Model):
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
     # RELACIONES
-    maquinaria = db.relationship('Maquinaria', lazy='joined')
+    maquinaria = db.relationship(
+        'Maquinaria',
+        back_populates='mantenimientos_programados',
+        lazy='joined'
+    )
     plan_item = db.relationship('PlanItem', lazy='joined')
 
     # ==========================
     # LÓGICA
     # ==========================
-
     def calcular_horas_programadas(self):
 
         if not self.frecuencia_horas:
             return None
 
-        return (self.ultima_horas or 0) + self.frecuencia_horas
+        return self.calcular_proxima_hora()
+
+    def calcular_ocurrencias(self):
+
+        if not self.frecuencia_horas or not self.maquinaria:
+            return []
+
+        horas_actuales = int(
+            self.maquinaria.horometro_actual or 0
+        )
+
+        base = int(
+            self.horas_base or 0
+        )
+
+        frecuencia = int(
+            self.frecuencia_horas
+        )
+
+        if horas_actuales < base + frecuencia:
+            return []
+
+        cantidad = (
+            (horas_actuales - base)
+            // frecuencia
+        )
+
+        return [
+            base + (frecuencia * i)
+            for i in range(1, cantidad + 1)
+        ]
+        
+        
+        
+    def calcular_proxima_hora(self):
+
+        if not self.frecuencia_horas:
+            return None
+
+        frecuencia = int(self.frecuencia_horas)
+
+        # Si ya existe un mantenimiento registrado,
+        # el próximo se calcula desde la hora de ese mantenimiento.
+        if self.ultima_horas is not None and self.ultima_horas > 0:
+            ultima_hora = int(self.ultima_horas)
+        else:
+            # Si todavía nunca se ha realizado un mantenimiento,
+            # se toma horas_base como punto inicial.
+            ultima_hora = int(self.horas_base or 0)
+
+        return ultima_hora + frecuencia
+
+
 
     def calcular_horas_restantes(self):
 
@@ -1212,13 +1405,16 @@ class MaquinariaPlanItem(db.Model):
             return None
 
         horas_actuales = self.maquinaria.horometro_actual or 0
-        horas_programadas = self.calcular_horas_programadas()
+        horas_programadas = self.calcular_proxima_hora()
 
         if horas_programadas is None:
             return None
 
-        return horas_programadas - horas_actuales
+        horas_actuales = Decimal(str(horas_actuales))
+        horas_programadas = Decimal(str(horas_programadas))
 
+        return horas_programadas - horas_actuales
+    
     def calcular_estado(self):
 
         restantes = self.calcular_horas_restantes()
@@ -1248,46 +1444,59 @@ class MaquinariaPlanItem(db.Model):
             "frecuencia_horas": self.frecuencia_horas,
             "alerta_horas": self.alerta_horas,
 
+            "horas_base": self.horas_base,
             "ultima_horas": self.ultima_horas,
-            "ultima_fecha": str(self.ultima_fecha) if self.ultima_fecha else None,
+
+            "ultima_fecha": (
+                str(self.ultima_fecha)
+                if self.ultima_fecha
+                else None
+            ),
 
             "horometro_actual": (
                 self.maquinaria.horometro_actual
-                if self.maquinaria else 0
+                if self.maquinaria
+                else 0
             ),
 
             "horas_programadas": self.calcular_horas_programadas(),
+
             "horas_restantes": self.calcular_horas_restantes(),
 
             "estado": self.calcular_estado(),
 
             "activo": self.activo,
+
             "sistema": (
                 self.plan_item.sistema
-                if self.plan_item else None
+                if self.plan_item
+                else None
             ),
 
             "nombre": (
                 self.plan_item.nombre
-                if self.plan_item else None
+                if self.plan_item
+                else None
             ),
 
             "descripcion": (
                 self.plan_item.descripcion
-                if self.plan_item else None
+                if self.plan_item
+                else None
             ),
 
             "tipo_mantenimiento": (
                 self.plan_item.tipo_mantenimiento
-                if self.plan_item else None
+                if self.plan_item
+                else None
             ),
 
             "tipo_control": "HORAS",
 
-
             "plan_item": (
                 self.plan_item.to_dict()
-                if self.plan_item else None
+                if self.plan_item
+                else None
             )
         }
         
@@ -1315,6 +1524,7 @@ class MaquinariaMantenimiento(db.Model):
     fecha = db.Column(db.Date)
 
     horas = db.Column(db.Integer)
+    horas_programadas = db.Column(db.Integer)
 
     tipo = db.Column(db.String(5))
 
@@ -1377,7 +1587,7 @@ class MaquinariaMantenimiento(db.Model):
             "observaciones": self.observaciones,
 
             "completado": self.completado,
-
+            "horas_programadas": self.horas_programadas,
             "plan_item": (
                 self.maquinaria_plan_item.plan_item.to_dict()
                 if self.maquinaria_plan_item and self.maquinaria_plan_item.plan_item
@@ -1433,7 +1643,65 @@ class SistemaVehiculo(db.Model):
     activo = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
     
-    
+class PlanItemActividad(db.Model):
+    __tablename__ = 'plan_item_actividades'
+
+    id = db.Column(
+        db.Integer,
+        primary_key=True
+    )
+
+    plan_item_id = db.Column(
+        db.Integer,
+        db.ForeignKey('plan_items.id'),
+        nullable=False
+    )
+
+    nombre = db.Column(
+        db.String(255),
+        nullable=False
+    )
+
+    descripcion = db.Column(
+        db.Text
+    )
+
+    obligatorio = db.Column(
+        db.Boolean,
+        default=True
+    )
+
+    orden = db.Column(
+        db.Integer,
+        default=0
+    )
+
+    activo = db.Column(
+        db.Boolean,
+        default=True
+    )
+
+    created_at = db.Column(
+        db.DateTime,
+        server_default=db.func.now()
+    )
+
+    plan_item = db.relationship(
+        'PlanItem',
+        back_populates='actividades'
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "plan_item_id": self.plan_item_id,
+            "nombre": self.nombre,
+            "descripcion": self.descripcion,
+            "obligatorio": self.obligatorio,
+            "orden": self.orden,
+            "activo": self.activo
+        }
+          
 class Viaje(db.Model):
     __tablename__ = 'viajes'
 
@@ -1685,7 +1953,7 @@ class Alerta(db.Model):
 
     created_at = db.Column(
         db.DateTime,
-        default=datetime.utcnow
+        default=lambda: datetime.now(ZoneInfo("America/Bogota"))
     )
     
     maquinaria_id = db.Column(
@@ -1951,4 +2219,806 @@ class InspeccionMensual(db.Model):
             "archivo": self.archivo,
             "observaciones": self.observaciones,
             "created_at": str(self.created_at)
+        }
+        
+        
+# ==========================
+# PREOPERACIONAL VEHICULAR
+# ==========================
+
+
+class TipoInspeccion(db.Model):
+    __tablename__ = "tipos_inspeccion"
+
+    id = db.Column(db.Integer, primary_key=True)
+    nombre = db.Column(db.String(100), nullable=False)
+    descripcion = db.Column(db.Text)
+    activo = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(ZoneInfo("America/Bogota")))
+
+    plantillas = db.relationship(
+        "InspeccionPlantilla",
+        backref="tipo_inspeccion",
+        lazy=True
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "nombre": self.nombre,
+            "descripcion": self.descripcion,
+            "activo": self.activo
+        }
+
+class InspeccionPlantilla(db.Model):
+    __tablename__ = "inspeccion_plantillas"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    nombre = db.Column(db.String(150), nullable=False)
+
+    descripcion = db.Column(db.Text)
+
+    tipo_inspeccion_id = db.Column(
+        db.Integer,
+        db.ForeignKey("tipos_inspeccion.id"),
+        nullable=False
+    )
+
+    tipo_activo = db.Column(
+        db.Enum("VEHICULO", "MAQUINARIA", name="tipo_activo_inspeccion"),
+        nullable=False
+    )
+    tipo_medicion = db.Column(
+        db.Enum(
+            "KILOMETRAJE",
+            "HOROMETRO",
+            "NINGUNO",
+            name="tipo_medicion_inspeccion"
+        ),
+        default="NINGUNO",
+        nullable=False
+    )
+
+    tipo_vehiculo_id = db.Column(
+        db.Integer,
+        db.ForeignKey("tipos_vehiculo.id")
+    )
+
+    tipo_maquinaria_id = db.Column(
+        db.Integer,
+        db.ForeignKey("tipos_maquinaria.id")
+    )
+
+    version = db.Column(db.Integer, default=1)
+
+    activa = db.Column(db.Boolean, default=True)
+
+    created_at = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(ZoneInfo("America/Bogota"))
+    )
+    inspecciones = db.relationship(
+        "Inspeccion",
+        backref="plantilla",
+        lazy=True
+    )
+
+    categorias = db.relationship(
+        "InspeccionCategoria",
+        backref="plantilla",
+        cascade="all, delete-orphan",
+        lazy=True
+    )
+    tipo_vehiculo = db.relationship(
+        "TipoVehiculo",
+        backref="plantillas_inspeccion"
+    )
+
+    tipo_maquinaria = db.relationship(
+        "TipoMaquinaria",
+        backref="plantillas_inspeccion"
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            "tipo_inspeccion_id",
+            "tipo_vehiculo_id",
+            "version",
+            name="uq_plantilla_vehiculo"
+        ),
+        db.UniqueConstraint(
+            "tipo_inspeccion_id",
+            "tipo_maquinaria_id",
+            "version",
+            name="uq_plantilla_maquinaria"
+        )
+        
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "nombre": self.nombre,
+            "descripcion": self.descripcion,
+            "tipo_inspeccion_id": self.tipo_inspeccion_id,
+            "tipo_activo": self.tipo_activo,
+            "tipo_vehiculo_id": self.tipo_vehiculo_id,
+            "tipo_maquinaria_id": self.tipo_maquinaria_id,
+            "version": self.version,
+            "activa": self.activa,
+            "tipo_medicion": self.tipo_medicion,
+
+            "categorias": [
+                categoria.to_dict()
+                for categoria in self.categorias
+            ]
+        }
+
+class InspeccionCategoria(db.Model):
+    __tablename__ = "inspeccion_categorias"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    plantilla_id = db.Column(
+        db.Integer,
+        db.ForeignKey("inspeccion_plantillas.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    nombre = db.Column(db.String(150), nullable=False)
+
+    orden = db.Column(db.Integer, default=1)
+
+    items = db.relationship(
+        "InspeccionItem",
+        backref="categoria",
+        cascade="all, delete-orphan",
+        lazy=True,
+        order_by="InspeccionItem.orden"
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "plantilla_id": self.plantilla_id,
+            "nombre": self.nombre,
+            "orden": self.orden,
+
+            "items": [
+                item.to_dict()
+                for item in self.items
+                if item.activo
+            ]
+        }
+
+class InspeccionItem(db.Model):
+    __tablename__ = "inspeccion_items"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    categoria_id = db.Column(
+        db.Integer,
+        db.ForeignKey("inspeccion_categorias.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    codigo = db.Column(db.String(50), unique=True, nullable=False)
+
+    descripcion = db.Column(db.String(255))
+
+    orden = db.Column(db.Integer, default=1)
+
+    tipo_respuesta = db.Column(
+        db.Enum(
+            "SI_NO",
+            "SI_NO_NA",
+            "NUMERO",
+            "TEXTO",
+            name="tipo_respuesta_inspeccion"
+        ),
+        default="SI_NO_NA"
+    )
+
+    ayuda = db.Column(db.Text)
+
+    placeholder = db.Column(db.String(150))
+
+    obligatorio = db.Column(db.Boolean, default=True)
+
+    permite_na = db.Column(db.Boolean, default=False)
+
+    requiere_observacion = db.Column(db.Boolean, default=False)
+
+    requiere_foto = db.Column(db.Boolean, default=False)
+
+    foto_si_falla = db.Column(db.Boolean, default=True)
+
+    genera_alerta = db.Column(db.Boolean, default=True)
+
+    bloquea_operacion = db.Column(db.Boolean, default=False)
+
+    criticidad = db.Column(
+        db.Enum(
+            "BAJA",
+            "MEDIA",
+            "ALTA",
+            "CRITICA",
+            name="criticidad_inspeccion"
+        ),
+        default="MEDIA"
+    )
+
+    activo = db.Column(db.Boolean, default=True)
+
+    respuestas = db.relationship(
+        "InspeccionRespuesta",
+        backref="item",
+        lazy=True
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "categoria_id": self.categoria_id,
+            "codigo": self.codigo,
+            "descripcion": self.descripcion,
+            "orden": self.orden,
+            "tipo_respuesta": self.tipo_respuesta,
+            "ayuda": self.ayuda,
+            "placeholder": self.placeholder,
+            "obligatorio": self.obligatorio,
+            "permite_na": self.permite_na,
+            "requiere_observacion": self.requiere_observacion,
+            "requiere_foto": self.requiere_foto,
+            "foto_si_falla": self.foto_si_falla,
+            "genera_alerta": self.genera_alerta,
+            "bloquea_operacion": self.bloquea_operacion,
+            "criticidad": self.criticidad,
+            "activo": self.activo
+        }
+
+
+class Inspeccion(db.Model):
+    __tablename__ = "inspecciones"
+
+    id = db.Column(
+        db.Integer,
+        primary_key=True
+    )
+
+    plantilla_id = db.Column(
+        db.Integer,
+        db.ForeignKey("inspeccion_plantillas.id"),
+        nullable=False
+    )
+
+    usuario_id = db.Column(
+        db.Integer,
+        db.ForeignKey("usuarios.id"),
+        nullable=False
+    )
+
+    vehiculo_id = db.Column(
+        db.Integer,
+        db.ForeignKey("vehiculos.id")
+    )
+
+    maquinaria_id = db.Column(
+        db.Integer,
+        db.ForeignKey("maquinaria.id")
+    )
+
+    hora_inicio = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=lambda: datetime.now(
+            ZoneInfo("America/Bogota")
+        )
+    )
+
+    hora_fin = db.Column(
+        db.DateTime
+    )
+
+    # =====================================================
+    # LECTURA / CONTADOR DEL ACTIVO
+    # =====================================================
+
+    contador_inicial = db.Column(
+        db.Numeric(12, 2),
+        nullable=True
+    )
+
+    foto_contador_inicial = db.Column(
+        db.String(500),
+        nullable=True
+    )
+
+    contador_final = db.Column(
+        db.Numeric(12, 2),
+        nullable=True
+    )
+
+    foto_contador_final = db.Column(
+        db.String(500),
+        nullable=True
+    )
+
+    # =====================================================
+    # ESTADO
+    # =====================================================
+
+    estado = db.Column(
+        db.Enum(
+            'BORRADOR',
+            'EN_PROCESO',
+            'FINALIZADA',
+            'REVISADA',
+            'ANULADA',
+            'PENDIENTE_CIERRE',
+            name="estado_inspeccion"
+        ),
+        default="BORRADOR"
+    )
+
+    responsable_revision = db.Column(
+        db.Integer,
+        db.ForeignKey("usuarios.id")
+    )
+
+    fecha_revision = db.Column(
+        db.DateTime
+    )
+
+    observaciones_generales = db.Column(
+        db.Text
+    )
+
+    created_at = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(
+            ZoneInfo("America/Bogota")
+        )
+    )
+
+    # =====================================================
+    # RELACIONES
+    # =====================================================
+
+    anomalias = db.relationship(
+        "InspeccionAnomalia",
+        backref="inspeccion",
+        cascade="all, delete-orphan",
+        lazy=True
+    )
+
+    respuestas = db.relationship(
+        "InspeccionRespuesta",
+        backref="inspeccion",
+        cascade="all, delete-orphan",
+        lazy=True
+    )
+
+    usuario = db.relationship(
+        "Usuario",
+        foreign_keys=[usuario_id],
+        backref="inspecciones_realizadas"
+    )
+
+    revisor = db.relationship(
+        "Usuario",
+        foreign_keys=[responsable_revision],
+        backref="inspecciones_revisadas"
+    )
+
+    vehiculo = db.relationship(
+        "Vehiculo",
+        back_populates="inspecciones_preoperacionales"
+    )
+
+    maquinaria = db.relationship(
+        "Maquinaria",
+        back_populates="inspecciones_preoperacionales"
+    )
+
+    # =====================================================
+    # SERIALIZACIÓN
+    # =====================================================
+
+    def to_dict(self):
+
+        return {
+
+            "id": self.id,
+
+            "plantilla_id": self.plantilla_id,
+
+            "estado": self.estado,
+
+            # =================================================
+            # FECHAS
+            # =================================================
+
+            "hora_inicio": (
+                self.hora_inicio.isoformat()
+                if self.hora_inicio
+                else None
+            ),
+
+            "hora_fin": (
+                self.hora_fin.isoformat()
+                if self.hora_fin
+                else None
+            ),
+
+            "created_at": (
+                self.created_at.isoformat()
+                if self.created_at
+                else None
+            ),
+
+            # =================================================
+            # USUARIO
+            # =================================================
+
+            "usuario_id": self.usuario_id,
+
+            "usuario": (
+                self.usuario.nombre
+                if self.usuario
+                else None
+            ),
+
+            # =================================================
+            # ACTIVO
+            # =================================================
+
+            "vehiculo_id": self.vehiculo_id,
+
+            "placa": (
+                self.vehiculo.placa
+                if self.vehiculo
+                else None
+            ),
+
+            "maquinaria_id": self.maquinaria_id,
+
+            "codigo_maquinaria": (
+                self.maquinaria.codigo
+                if self.maquinaria
+                else None
+            ),
+
+            "tipo_maquinaria": (
+                self.maquinaria.tipo_maquinaria.nombre
+                if self.maquinaria
+                and self.maquinaria.tipo_maquinaria
+                else None
+            ),
+
+            # =================================================
+            # TIPO DE MEDICIÓN
+            # =================================================
+
+            "tipo_medicion": (
+                self.plantilla.tipo_medicion
+                if self.plantilla
+                else None
+            ),
+
+            # =================================================
+            # LECTURAS
+            # =================================================
+
+            "lectura_inicial": (
+                float(self.contador_inicial)
+                if self.contador_inicial is not None
+                else None
+            ),
+
+            "lectura_final": (
+                float(self.contador_final)
+                if self.contador_final is not None
+                else None
+            ),
+
+            "contador_inicial": (
+                float(self.contador_inicial)
+                if self.contador_inicial is not None
+                else None
+            ),
+
+            "contador_final": (
+                float(self.contador_final)
+                if self.contador_final is not None
+                else None
+            ),
+
+            "foto_contador_inicial": (
+                self.foto_contador_inicial
+            ),
+
+            "foto_contador_final": (
+                self.foto_contador_final
+            ),
+
+            # =================================================
+            # OBSERVACIONES
+            # =================================================
+
+            "observaciones_generales": (
+                self.observaciones_generales
+            )
+        }
+
+
+
+class InspeccionRespuesta(db.Model):
+    __tablename__ = "inspeccion_respuestas"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    alerta_id = db.Column(
+        db.Integer,
+        db.ForeignKey("alertas.id")
+    )
+
+    inspeccion_id = db.Column(
+        db.Integer,
+        db.ForeignKey("inspecciones.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    item_id = db.Column(
+        db.Integer,
+        db.ForeignKey("inspeccion_items.id"),
+        nullable=False
+    )
+
+    valor = db.Column(db.String(255))
+
+    observacion = db.Column(db.Text)
+
+    created_at = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(ZoneInfo("America/Bogota"))
+    )
+
+    fotos = db.relationship(
+        "InspeccionFoto",
+        backref="respuesta",
+        cascade="all, delete-orphan",
+        lazy=True
+    )
+    alerta = db.relationship(
+        "Alerta",
+        backref="respuestas_inspeccion"
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "alerta_id": self.alerta_id,
+            "inspeccion_id": self.inspeccion_id,
+            "item_id": self.item_id,
+            "valor": self.valor,
+            "observacion": self.observacion,
+            "fotos": [foto.to_dict() for foto in self.fotos]
+        }
+
+class InspeccionFoto(db.Model):
+    __tablename__ = "inspeccion_fotos"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    respuesta_id = db.Column(
+        db.Integer,
+        db.ForeignKey("inspeccion_respuestas.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    archivo = db.Column(db.String(500), nullable=False)
+
+    latitud = db.Column(db.Numeric(10, 8))
+
+    longitud = db.Column(db.Numeric(11, 8))
+
+    precision_gps = db.Column(db.Numeric(8, 2))
+
+    direccion = db.Column(db.String(255))
+
+    fecha_dispositivo = db.Column(db.DateTime)
+
+    fecha_servidor = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(ZoneInfo("America/Bogota"))
+    )
+
+    watermark = db.Column(db.Boolean, default=True)
+
+    created_at = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(ZoneInfo("America/Bogota"))
+    )
+
+    mime_type = db.Column(db.String(50))
+
+    tamano_bytes = db.Column(db.BigInteger)
+
+    ancho = db.Column(db.Integer)
+
+    alto = db.Column(db.Integer)
+
+    hash_archivo = db.Column(db.String(64))
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "respuesta_id": self.respuesta_id,
+            "archivo": self.archivo,
+            "latitud": float(self.latitud) if self.latitud else None,
+            "longitud": float(self.longitud) if self.longitud else None,
+            "precision_gps": float(self.precision_gps) if self.precision_gps else None,
+            "direccion": self.direccion,
+            "fecha_dispositivo": self.fecha_dispositivo.isoformat() if self.fecha_dispositivo else None,
+            "fecha_servidor": self.fecha_servidor.isoformat() if self.fecha_servidor else None,
+            "watermark": self.watermark,
+            "mime_type": self.mime_type,
+            "tamano_bytes": self.tamano_bytes,
+            "ancho": self.ancho,
+            "alto": self.alto,
+            "hash_archivo": self.hash_archivo
+        }
+
+class ActivoOperador(db.Model):
+    __tablename__ = "activo_operador"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    usuario_id = db.Column(
+        db.Integer,
+        db.ForeignKey("usuarios.id"),
+        nullable=False
+    )
+
+    vehiculo_id = db.Column(
+        db.Integer,
+        db.ForeignKey("vehiculos.id")
+    )
+
+    maquinaria_id = db.Column(
+        db.Integer,
+        db.ForeignKey("maquinaria.id")
+    )
+
+    activo = db.Column(
+        db.Boolean,
+        default=True
+    )
+
+    fecha_asignacion = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(ZoneInfo("America/Bogota"))
+    )
+
+    fecha_fin = db.Column(db.DateTime)
+
+    observaciones = db.Column(db.Text)
+
+    usuario = db.relationship(
+        "Usuario",
+        backref="activos_asignados"
+    )
+
+    vehiculo = db.relationship(
+        "Vehiculo",
+        backref="operadores_asignados"
+    )
+
+    maquinaria = db.relationship(
+        "Maquinaria",
+        backref="operadores_asignados"
+    )
+    created_at = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(ZoneInfo("America/Bogota"))
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "usuario_id": self.usuario_id,
+            "vehiculo_id": self.vehiculo_id,
+            "maquinaria_id": self.maquinaria_id,
+            "activo": self.activo,
+            "fecha_asignacion": self.fecha_asignacion.isoformat() if self.fecha_asignacion else None,
+            "fecha_fin": self.fecha_fin.isoformat() if self.fecha_fin else None,
+            "observaciones": self.observaciones
+        }
+
+
+class InspeccionAnomalia(db.Model):
+
+    __tablename__ = "anomalias"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    inspeccion_id = db.Column(
+        db.Integer,
+        db.ForeignKey("inspecciones.id"),
+        nullable=False
+    )
+
+    usuario_id = db.Column(
+        db.Integer,
+        db.ForeignKey("usuarios.id"),
+        nullable=False
+    )
+
+    titulo = db.Column(db.String(200), nullable=False)
+
+    descripcion = db.Column(db.Text)
+
+    prioridad = db.Column(
+        db.String(20),
+        nullable=False,
+        default="MEDIA"
+    )
+
+    estado = db.Column(
+        db.String(30),
+        default="ABIERTA"
+    )
+
+    created_at = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(ZoneInfo("America/Bogota"))
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "inspeccion_id": self.inspeccion_id,
+            "usuario_id": self.usuario_id,
+            "titulo": self.titulo,
+            "descripcion": self.descripcion,
+            "prioridad": self.prioridad,
+            "estado": self.estado,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+        
+
+       
+class AnomaliaFoto(db.Model):
+
+    __tablename__ = "anomalia_fotos"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    anomalia_id = db.Column(
+        db.Integer,
+        db.ForeignKey("anomalias.id"),
+        nullable=False
+    )
+
+    archivo = db.Column(
+        db.String(255),
+        nullable=False
+    )
+
+    created_at = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(ZoneInfo("America/Bogota"))
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "anomalia_id": self.anomalia_id,
+            "archivo": self.archivo,
+            "created_at": (
+                self.created_at.isoformat()
+                if self.created_at else None
+            )
         }

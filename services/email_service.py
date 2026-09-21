@@ -7,14 +7,14 @@ import os
 
 def enviar_email_alerta(alerta):
     destinatarios = [
-        "transmenasmart@gmail.com",
+        "ferney.bonilla59@gmail.com",
         # "auxiliaroperaciones@transmenaycarga.com",
         # "mantenimiento@transmenaycarga.com"
     ]
     
     destinatario = os.getenv(
         "ALERTA_EMAIL",
-        "transmenasmart@gmail.com"
+        "ferney.bonilla59@gmail.com"
     )
 
     color = "#dc2626"
@@ -71,12 +71,12 @@ def enviar_email_alerta(alerta):
                     text-align:center;
                 ">
 
-                    <img src="cid:logo_transmena"
-                         alt="Transmena Smart"
+                    <img src="cid:logo_intellifeet"
+                         alt="Intellifeet"
                          style="width:140px; margin-bottom:10px;" />
 
                     <h1 style="color:white; margin:0;">
-                        TRANSMENA SMART
+                        INTELLIFEET
                     </h1>
 
                     <p style="color:#cbd5e1; margin-top:10px;">
@@ -182,7 +182,7 @@ def enviar_email_alerta(alerta):
                     text-align:center;
                     color:#64748b;
                 ">
-                    © Transmena Smart
+                    © Intellifeet
                 </td>
             </tr>
 
@@ -196,13 +196,13 @@ def enviar_email_alerta(alerta):
     # =========================
     # 📌 EMBEBER LOGO (CID)
     # =========================
-    with current_app.open_resource("static/logo_transmena.jpg") as img:
+    with current_app.open_resource("static/intellifeet.png") as img:
         msg.attach(
-            "logo_transmena.jpg",
-            "image/jpeg",
+            "intellifeet.png",
+            "image/png",
             img.read(),
             "inline",
-            headers={"Content-ID": "<logo_transmena>"}
+            headers={"Content-ID": "<logo_intellifeet>"}
         )
 
     mail.send(msg)

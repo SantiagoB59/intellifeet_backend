@@ -27,6 +27,9 @@ from routes.test_routes import test_bp
 from routes.inspeccion_mensual import inspeccion_mensual_bp
 from scheduler import iniciar_scheduler
 # from routes.mantenimiento_importar import mantenimiento_importar_bp
+from routes.inspecciones import inspecciones_bp
+from routes.activo_operador import activo_operador_bp
+from routes.usuarios import usuarios_bp
 
 
 # 🔥 sockets
@@ -57,11 +60,13 @@ def create_app():
         supports_credentials=True,
         allow_headers=["Content-Type", "Authorization"]
     )
+    
 
     # ==============================
     # CARPETAS
     # ==============================
     os.makedirs('uploads/vehiculos', exist_ok=True)
+    os.makedirs('uploads/inspecciones', exist_ok=True)
 
     # ==============================
     # BLUEPRINTS
@@ -81,6 +86,9 @@ def create_app():
     app.register_blueprint(test_bp, url_prefix='/api/test')
     # app.register_blueprint(mantenimiento_importar_bp, url_prefix='/api/mantenimiento_importar')
     app.register_blueprint(inspeccion_mensual_bp, url_prefix='/api/inspeccion_mensual')
+    app.register_blueprint(inspecciones_bp, url_prefix="/api/inspecciones")
+    app.register_blueprint(activo_operador_bp, url_prefix="/api/activo-operador")
+    app.register_blueprint(usuarios_bp, url_prefix="/api/usuarios")
     # ==============================
     # SERVIR IMÁGENES
     # ==============================
@@ -94,7 +102,7 @@ def create_app():
     @app.route('/')
     def index():
         return jsonify({
-            "message": "🚛 API Transmena Smart funcionando",
+            "message": "🚛 API Intellifeet funcionando",
             "status": "ok"
         })
 

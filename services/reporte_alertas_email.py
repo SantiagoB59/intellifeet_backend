@@ -46,13 +46,13 @@ def enviar_reporte_diario_alertas(app):
         archivo_excel = generar_excel_alertas(alertas)
 
         destinatarios = [
-        "transmenasmart@gmail.com",
+        "ferney.bonilla59@gmail.com",
         # "auxiliaroperaciones@transmenaycarga.com",
         # "mantenimiento@transmenaycarga.com"
         ]
         destinatario = os.getenv(
             "ALERTA_EMAIL",
-            "transmenasmart@gmail.com"
+            "ferney.bonilla59@gmail.com"
         )
 
         total = len(alertas)
@@ -100,7 +100,7 @@ def enviar_reporte_diario_alertas(app):
                     padding:30px;
                     text-align:center;
                 ">
-                    <h1>🚛 TRANSMENA SMART</h1>
+                    <h1>🚛 INTELLIFEET</h1>
                     <h2>Consolidado Diario de Alertas</h2>
                     <p>{hoy.strftime('%d/%m/%Y')}</p>
                 </div>
@@ -160,7 +160,7 @@ def enviar_reporte_diario_alertas(app):
                     font-size:12px;
                 ">
                     Sistema de Monitoreo Vehicular
-                    TRANSMENA SMART
+                    INTELLIFEET
                 </div>
 
             </div>
@@ -285,7 +285,7 @@ def generar_excel_alertas(alertas):
     try:
 
         logo = Image(
-            'static/logo_transmena.jpg'
+            'static/intellifeet.png'
         )
 
         logo.width = 250
