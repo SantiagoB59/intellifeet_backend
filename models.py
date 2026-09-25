@@ -36,6 +36,16 @@ class Usuario(db.Model):
 
     role_id = db.Column(db.Integer, db.ForeignKey('roles.id'), nullable=False)
     rol = db.relationship('Rol', backref='usuarios')
+    tipo_operador_id = db.Column(
+        db.Integer,
+        db.ForeignKey('tipos_operador.id'),
+        nullable=True
+    )
+
+    tipo_operador = db.relationship(
+        'TipoOperador',
+        backref='usuarios'
+    )
 
     telefono = db.Column(db.String(20))
     activo = db.Column(db.Boolean, default=True)
@@ -56,7 +66,13 @@ class Usuario(db.Model):
             "email": self.email,
             "rol": self.rol.nombre if self.rol else None,
             "activo": self.activo,
-            "created_at": str(self.created_at)
+            "created_at": str(self.created_at),
+            "tipo_operador_id": self.tipo_operador_id,
+            "tipo_operador": (
+                self.tipo_operador.nombre
+                if self.tipo_operador
+                else None
+            ),
         }
 
 
@@ -442,6 +458,39 @@ class PlanItem(db.Model):
         default='VEHICULO',
         nullable=False
     )
+    # ==========================
+    # TIPO ESPECÍFICO DE ACTIVO
+    # ==========================
+
+    tipo_vehiculo_id = db.Column(
+        db.Integer,
+        db.ForeignKey(
+            'tipos_vehiculo.id',
+            ondelete='SET NULL',
+            onupdate='CASCADE'
+        ),
+        nullable=True
+    )
+
+    tipo_maquinaria_id = db.Column(
+        db.Integer,
+        db.ForeignKey(
+            'tipos_maquinaria.id',
+            ondelete='SET NULL',
+            onupdate='CASCADE'
+        ),
+        nullable=True
+    )
+
+    tipo_vehiculo = db.relationship(
+        'TipoVehiculo',
+        foreign_keys=[tipo_vehiculo_id]
+    )
+
+    tipo_maquinaria = db.relationship(
+        'TipoMaquinaria',
+        foreign_keys=[tipo_maquinaria_id]
+    )
 
     # ==========================
     # CONTROL DEL MANTENIMIENTO
@@ -513,6 +562,25 @@ class PlanItem(db.Model):
 
             "tipo_activo":
                 self.tipo_activo,
+            "tipo_vehiculo_id":
+                self.tipo_vehiculo_id,
+
+            "tipo_vehiculo":
+                (
+                    self.tipo_vehiculo.nombre
+                    if self.tipo_vehiculo
+                    else None
+                ),
+
+            "tipo_maquinaria_id":
+                self.tipo_maquinaria_id,
+
+            "tipo_maquinaria":
+                (
+                    self.tipo_maquinaria.nombre
+                    if self.tipo_maquinaria
+                    else None
+                ),
 
             "tipo_control":
                 self.tipo_control,
@@ -1257,6 +1325,7 @@ class MaquinariaDocumento(db.Model):
             "archivo_url": self.archivo_url
         }
 
+
 class MaquinariaHoras(db.Model):
     __tablename__ = "maquinaria_horas"
 
@@ -1853,6 +1922,11 @@ class Alerta(db.Model):
         db.ForeignKey('vehiculos.id'),
         nullable=True
     )
+    usuario_id = db.Column(
+        db.Integer,
+        db.ForeignKey('usuarios.id'),
+        nullable=True
+    )
 
     viaje_id = db.Column(
         db.Integer,
@@ -1973,11 +2047,16 @@ class Alerta(db.Model):
         db.ForeignKey('maquinaria_plan_item.id'),
         nullable=True
     )
+    
 
     # =====================================================
     # RELACIONES SQLALCHEMY
     # =====================================================
 
+    usuario = db.relationship(
+        'Usuario',
+        lazy=True
+    )
     vehiculo = db.relationship(
         'Vehiculo',
         lazy=True
@@ -2161,6 +2240,17 @@ class Alerta(db.Model):
                 }
 
                 if self.maquinaria_plan_item
+                else None
+            ),
+            'usuario_id': self.usuario_id,
+
+            'usuario': (
+                {
+                    'id': self.usuario.id,
+                    'nombre': self.usuario.nombre,
+                    'username': self.usuario.username
+                }
+                if self.usuario
                 else None
             ),
             
@@ -2516,6 +2606,27 @@ class Inspeccion(db.Model):
             ZoneInfo("America/Bogota")
         )
     )
+    firma_path = db.Column(
+        db.String(255),
+        nullable=True
+    )
+
+    tratamiento_datos_aceptado = db.Column(
+        db.Boolean,
+        default=False,
+        nullable=False
+    )
+
+    confirma_firma = db.Column(
+        db.Boolean,
+        default=False,
+        nullable=False
+    )
+
+    confirmacion_fecha = db.Column(
+        db.DateTime,
+        nullable=True
+    )
 
     hora_fin = db.Column(
         db.DateTime
@@ -2741,6 +2852,21 @@ class Inspeccion(db.Model):
 
             "foto_contador_final": (
                 self.foto_contador_final
+            ),
+            "firma_path": self.firma_path,
+
+            "tratamiento_datos_aceptado": (
+                self.tratamiento_datos_aceptado
+            ),
+
+            "confirma_firma": (
+                self.confirma_firma
+            ),
+
+            "confirmacion_fecha": (
+                self.confirmacion_fecha.isoformat()
+                if self.confirmacion_fecha
+                else None
             ),
 
             # =================================================
@@ -3021,4 +3147,213 @@ class AnomaliaFoto(db.Model):
                 self.created_at.isoformat()
                 if self.created_at else None
             )
+        }
+        
+
+# ==========================
+# TIPOS DE DOCUMENTOS DE USUARIO
+# ==========================
+class UsuarioDocumentoTipo(db.Model):
+    __tablename__ = 'usuario_documentos_tipo'
+
+    id = db.Column(
+        db.Integer,
+        primary_key=True
+    )
+
+    nombre = db.Column(
+        db.String(100),
+        nullable=False
+    )
+
+    obligatorio = db.Column(
+        db.Boolean,
+        default=True
+    )
+
+    activo = db.Column(
+        db.Boolean,
+        default=True
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "nombre": self.nombre,
+            "obligatorio": self.obligatorio,
+            "activo": self.activo
+        }
+
+# ==========================
+# TIPOS DE OPERADOR
+# ==========================
+class TipoOperador(db.Model):
+    __tablename__ = 'tipos_operador'
+
+    id = db.Column(
+        db.Integer,
+        primary_key=True
+    )
+
+    nombre = db.Column(
+        db.String(100),
+        nullable=False
+    )
+
+    activo = db.Column(
+        db.Boolean,
+        default=True
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "nombre": self.nombre,
+            "activo": self.activo
+        }
+        
+        
+# ==========================
+# DOCUMENTOS REQUERIDOS
+# POR TIPO DE OPERADOR
+# ==========================
+class TipoOperadorDocumento(db.Model):
+    __tablename__ = 'tipo_operador_documentos'
+
+    id = db.Column(
+        db.Integer,
+        primary_key=True
+    )
+
+    tipo_operador_id = db.Column(
+        db.Integer,
+        db.ForeignKey('tipos_operador.id'),
+        nullable=False
+    )
+
+    documento_tipo_id = db.Column(
+        db.Integer,
+        db.ForeignKey('usuario_documentos_tipo.id'),
+        nullable=False
+    )
+
+    obligatorio = db.Column(
+        db.Boolean,
+        default=True
+    )
+
+    tipo_operador = db.relationship(
+        'TipoOperador',
+        backref='documentos_requeridos'
+    )
+
+    documento_tipo = db.relationship(
+        'UsuarioDocumentoTipo',
+        backref='tipos_operador'
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "tipo_operador_id": self.tipo_operador_id,
+            "documento_tipo_id": self.documento_tipo_id,
+            "documento": (
+                self.documento_tipo.nombre
+                if self.documento_tipo
+                else None
+            ),
+            "obligatorio": self.obligatorio
+        }
+        
+        
+# ==========================
+# DOCUMENTOS DE USUARIO
+# ==========================
+class UsuarioDocumento(db.Model):
+    __tablename__ = 'usuario_documentos'
+
+    id = db.Column(
+        db.Integer,
+        primary_key=True
+    )
+
+    usuario_id = db.Column(
+        db.Integer,
+        db.ForeignKey('usuarios.id'),
+        nullable=False
+    )
+
+    documento_tipo_id = db.Column(
+        db.Integer,
+        db.ForeignKey('usuario_documentos_tipo.id'),
+        nullable=False
+    )
+
+    fecha_vencimiento = db.Column(
+        db.Date,
+        nullable=True
+    )
+
+    archivo_url = db.Column(
+        db.String(500),
+        nullable=True
+    )
+
+    activo = db.Column(
+        db.Boolean,
+        default=True,
+        nullable=False
+    )
+
+    created_at = db.Column(
+        db.DateTime,
+        server_default=db.func.now()
+    )
+
+    updated_at = db.Column(
+        db.DateTime,
+        server_default=db.func.now(),
+        onupdate=db.func.now()
+    )
+
+    usuario = db.relationship(
+        'Usuario',
+        backref=db.backref(
+            'documentos',
+            lazy=True,
+            cascade='all, delete-orphan'
+        )
+    )
+
+    documento_tipo = db.relationship(
+        'UsuarioDocumentoTipo',
+        backref=db.backref(
+            'documentos_usuario',
+            lazy=True
+        )
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+
+            "usuario_id": self.usuario_id,
+
+            "documento_tipo_id": self.documento_tipo_id,
+
+            "documento": (
+                self.documento_tipo.nombre
+                if self.documento_tipo
+                else None
+            ),
+
+            "fecha_vencimiento": (
+                self.fecha_vencimiento.isoformat()
+                if self.fecha_vencimiento
+                else None
+            ),
+
+            "archivo_url": self.archivo_url,
+
+            "activo": self.activo
         }

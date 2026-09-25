@@ -61,8 +61,8 @@ from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from io import BytesIO
 
 import os
-
-from flask import Blueprint, request, jsonify, send_file
+import uuid
+from flask import Blueprint, request, jsonify, send_file, current_app
 
 datetime.now(ZoneInfo("America/Bogota"))
 from openpyxl.drawing.image import Image
@@ -107,12 +107,19 @@ class InspeccionService:
 
         hoy = InspeccionService.obtener_fecha_hoy()
 
-        return Inspeccion.query.filter(
-            Inspeccion.usuario_id == usuario_id,
-            Inspeccion.plantilla_id == plantilla_id,
-            db.func.date(Inspeccion.created_at) == hoy,
-            Inspeccion.estado != "ANULADA",
-        ).first()
+        return (
+            Inspeccion.query
+            .filter(
+                Inspeccion.usuario_id == usuario_id,
+                Inspeccion.plantilla_id == plantilla_id,
+                db.func.date(Inspeccion.hora_inicio) == hoy,
+                Inspeccion.estado != "ANULADA",
+            )
+            .order_by(
+                Inspeccion.id.desc()
+            )
+            .first()
+        )
 
     # =====================================================
     # OBTENER ACTIVO ASIGNADO AL OPERADOR
@@ -176,6 +183,17 @@ class InspeccionService:
     # OBTENER PLANTILLA
     # =====================================================
 
+    @staticmethod
+    def obtener_lectura_actual_activo(activo):
+
+        if activo["tipo"] == "VEHICULO":
+            return activo["activo"].km_actual
+
+        if activo["tipo"] == "MAQUINARIA":
+            return activo["activo"].horometro_actual
+
+        return None
+    
     @staticmethod
     def obtener_plantilla(tipo_activo, tipo_id):
 
@@ -970,7 +988,13 @@ class InspeccionService:
 
 
     @staticmethod
-    def guardar_lectura_final(inspeccion_id, data):
+    def guardar_lectura_final(
+        inspeccion_id,
+        data,
+        firma=None,
+        tratamiento_datos_aceptado=False,
+        confirma_firma=False
+    ):
 
         inspeccion = Inspeccion.query.get(inspeccion_id)
 
@@ -979,93 +1003,163 @@ class InspeccionService:
 
         if inspeccion.estado != "PENDIENTE_CIERRE":
             raise Exception(
-                "Debe finalizar el preoperacional antes de registrar la lectura final."
+                "Debe finalizar el preoperacional antes de registrar "
+                "la lectura final."
+            )
+
+        # =====================================================
+        # VALIDAR CONFIRMACIÓN Y FIRMA
+        # =====================================================
+
+        if not tratamiento_datos_aceptado:
+            raise Exception(
+                "Debe aceptar el tratamiento de datos."
+            )
+
+        if not confirma_firma:
+            raise Exception(
+                "Debe confirmar que está firmando la inspección."
+            )
+
+        if not firma:
+            raise Exception(
+                "Debe realizar la firma antes de finalizar."
             )
 
         tipo_medicion = inspeccion.plantilla.tipo_medicion
 
-        if tipo_medicion == "NINGUNO":
-            raise Exception(
-                "Esta inspección no requiere registrar una lectura final."
-            )
-
-        lectura = data.get("lectura")
-
-        if lectura is None:
-            raise Exception(
-                "Debe registrar la lectura final."
-            )
-
-        try:
-            lectura = float(lectura)
-        except (ValueError, TypeError):
-            raise Exception(
-                "La lectura final no es válida."
-            )
-
-        if lectura < 0:
-            raise Exception(
-                "La lectura no puede ser negativa."
-            )
-
-        if inspeccion.contador_inicial is None:
-            raise Exception(
-                "Primero debe registrar la lectura inicial."
-            )
-
-        if lectura < float(inspeccion.contador_inicial):
-            nombre_medicion = (
-                "kilometraje"
-                if tipo_medicion == "KILOMETRAJE"
-                else "horómetro"
-            )
-
-            raise Exception(
-                f"El {nombre_medicion} final no puede ser menor "
-                f"que el {nombre_medicion} inicial."
-            )
-
         # =====================================================
-        # GUARDAR LECTURA FINAL EN LA INSPECCIÓN
+        # LECTURA FINAL
+        # Solo aplica para KILOMETRAJE / HOROMETRO
         # =====================================================
 
-        inspeccion.contador_final = lectura
+        if tipo_medicion != "NINGUNO":
 
-        if data.get("foto"):
-            inspeccion.foto_contador_final = data["foto"]
+            lectura = data.get("lectura")
 
-        # =====================================================
-        # ACTUALIZAR HORÓMETRO DE LA MAQUINARIA
-        # =====================================================
-
-        if (
-            tipo_medicion == "HOROMETRO"
-            and inspeccion.maquinaria_id is not None
-        ):
-
-            maquinaria = Maquinaria.query.get(
-                inspeccion.maquinaria_id
-            )
-
-            if maquinaria:
-
-                # Última lectura real registrada
-                maquinaria.horometro_actual = lectura
-
-                # =================================================
-                # GUARDAR HISTORIAL DE LECTURA
-                # =================================================
-
-                registro_horas = MaquinariaHoras(
-                    maquinaria_id=maquinaria.id,
-                    horas=lectura,
-                    origen="PREOPERACIONAL"
+            if lectura is None:
+                raise Exception(
+                    "Debe registrar la lectura final."
                 )
 
-                db.session.add(registro_horas)
+            try:
+                lectura = float(lectura)
+
+            except (ValueError, TypeError):
+                raise Exception(
+                    "La lectura final no es válida."
+                )
+
+            if lectura < 0:
+                raise Exception(
+                    "La lectura no puede ser negativa."
+                )
+
+            if inspeccion.contador_inicial is None:
+                raise Exception(
+                    "Primero debe registrar la lectura inicial."
+                )
+
+            if lectura < float(inspeccion.contador_inicial):
+
+                nombre_medicion = (
+                    "kilometraje"
+                    if tipo_medicion == "KILOMETRAJE"
+                    else "horómetro"
+                )
+
+                raise Exception(
+                    f"El {nombre_medicion} final no puede ser menor "
+                    f"que el {nombre_medicion} inicial."
+                )
+
+            # =================================================
+            # GUARDAR LECTURA FINAL
+            # =================================================
+
+            inspeccion.contador_final = lectura
+
+            if data.get("foto"):
+                inspeccion.foto_contador_final = data["foto"]
+
+            # =================================================
+            # ACTUALIZAR HORÓMETRO DE LA MAQUINARIA
+            # =================================================
+
+            if (
+                tipo_medicion == "HOROMETRO"
+                and inspeccion.maquinaria_id is not None
+            ):
+
+                maquinaria = Maquinaria.query.get(
+                    inspeccion.maquinaria_id
+                )
+
+                if maquinaria:
+
+                    maquinaria.horometro_actual = lectura
+
+                    registro_horas = MaquinariaHoras(
+                        maquinaria_id=maquinaria.id,
+                        horas=lectura,
+                        origen="PREOPERACIONAL"
+                    )
+
+                    db.session.add(registro_horas)
 
         # =====================================================
-        # CERRAR INSPECCIÓN
+        # GUARDAR FIRMA DEL OPERADOR
+        # =====================================================
+
+        carpeta_firma = os.path.join(
+            "uploads",
+            "inspecciones",
+            str(inspeccion.id)
+        )
+
+        os.makedirs(
+            carpeta_firma,
+            exist_ok=True
+        )
+
+        nombre_firma = (
+            f"firma_{uuid.uuid4().hex}.png"
+        )
+
+        ruta_firma = os.path.join(
+            carpeta_firma,
+            nombre_firma
+        )
+
+        firma.save(ruta_firma)
+
+        inspeccion.firma_path = ruta_firma.replace(
+            "\\",
+            "/"
+        )
+
+        # =====================================================
+        # CONFIRMACIÓN DE TRATAMIENTO Y FIRMA
+        # =====================================================
+
+        inspeccion.tratamiento_datos_aceptado = True
+
+        inspeccion.confirma_firma = True
+
+        inspeccion.confirmacion_fecha = (
+            datetime.now(
+                ZoneInfo("America/Bogota")
+            )
+        )
+
+        inspeccion.hora_fin = (
+            datetime.now(
+                ZoneInfo("America/Bogota")
+            )
+        )
+
+        # =====================================================
+        # FINALIZAR INSPECCIÓN
         # =====================================================
 
         inspeccion.estado = "FINALIZADA"
@@ -1073,7 +1167,6 @@ class InspeccionService:
         db.session.commit()
 
         return inspeccion
-    
 
     @staticmethod
     def validar_lecturas(inspeccion):
@@ -1247,7 +1340,8 @@ class InspeccionService:
         query = Inspeccion.query.filter(
             Inspeccion.usuario_id == usuario_id,
             Inspeccion.hora_inicio >= inicio_dia,
-            Inspeccion.hora_inicio < fin_dia
+            Inspeccion.hora_inicio < fin_dia,
+            Inspeccion.estado != "ANULADA"
         )
 
         if vehiculo_id is not None:
@@ -1875,7 +1969,6 @@ class InspeccionService:
         )
 
         elementos = []
-
         # =========================================================
         # COLORES INTELLIFEET
         # =========================================================
@@ -3001,6 +3094,7 @@ class InspeccionService:
     ):
 
         from datetime import datetime, date, timedelta
+        from flask import current_app
 
         # =========================================================
         # CONVERTIR FECHA
@@ -3029,10 +3123,6 @@ class InspeccionService:
         # CALCULAR SEMANA
         # =========================================================
 
-        # weekday():
-        # lunes = 0
-        # domingo = 6
-
         inicio_semana = (
             fecha_referencia
             - timedelta(
@@ -3053,25 +3143,13 @@ class InspeccionService:
             InspeccionService
             .obtener_libro_preoperacionales_semanal(
                 inicio_semana,
-                vehiculo_id=vehiculo_id
+                vehiculo_id=vehiculo_id,
+                maquinaria_id=maquinaria_id
             )
         )
 
         # =========================================================
-        # IMPORTANTE
-        # =========================================================
-        #
-        # NO hacemos:
-        #
-        # if not inspecciones:
-        #     raise Exception(...)
-        #
-        # Porque una semana puede estar iniciando
-        # y todavía no tener inspecciones.
-        #
-        # En ese caso queremos mostrar la plantilla
-        # con los días vacíos.
-        #
+        # SI NO HAY INSPECCIONES
         # =========================================================
 
         if not inspecciones:
@@ -3173,6 +3251,12 @@ class InspeccionService:
         )
 
         # =========================================================
+        # DETERMINAR TIPO DE ACTIVO
+        # =========================================================
+
+        es_maquinaria = maquinaria_id is not None
+
+        # =========================================================
         # VEHÍCULO
         # =========================================================
 
@@ -3189,6 +3273,57 @@ class InspeccionService:
             if vehiculo
 
             else "SIN VEHÍCULO"
+
+        )
+
+        # =========================================================
+        # MAQUINARIA
+        # =========================================================
+
+        maquinaria = (
+
+            inspecciones[0].maquinaria
+
+            if inspecciones
+            and es_maquinaria
+
+            else None
+
+        )
+
+        nombre_maquinaria = (
+
+            getattr(
+                maquinaria,
+                "nombre",
+                None
+            )
+
+            or getattr(
+                maquinaria,
+                "codigo",
+                None
+            )
+
+            or getattr(
+                maquinaria,
+                "placa",
+                None
+            )
+
+            or "SIN MAQUINARIA"
+
+        )
+
+        # =========================================================
+        # NOMBRE DEL ACTIVO
+        # =========================================================
+
+        nombre_activo = (
+
+            nombre_maquinaria
+            if es_maquinaria
+            else nombre_vehiculo
 
         )
 
@@ -3275,6 +3410,9 @@ class InspeccionService:
                 # FECHA
                 # =================================================
 
+                if not inspeccion.hora_inicio:
+                    continue
+
                 fecha = (
                     inspeccion
                     .hora_inicio
@@ -3352,6 +3490,12 @@ class InspeccionService:
         # ENCABEZADO
         # =========================================================
 
+        titulo_activo = (
+            "MAQUINARIA"
+            if es_maquinaria
+            else "VEHÍCULO"
+        )
+
         encabezado = Table(
 
             [[
@@ -3361,8 +3505,8 @@ class InspeccionService:
                 Paragraph(
 
                     "<b>INSPECCIÓN PRE-OPERACIONAL</b><br/>"
-                    f"<b>VEHÍCULO: "
-                    f"{nombre_vehiculo}</b>",
+                    f"<b>{titulo_activo}: "
+                    f"{nombre_activo}</b>",
 
                     estilo_header,
 
@@ -3439,8 +3583,8 @@ class InspeccionService:
 
                 Paragraph(
 
-                    f"<b>VEHÍCULO:</b> "
-                    f"{nombre_vehiculo}",
+                    f"<b>{titulo_activo}:</b> "
+                    f"{nombre_activo}",
 
                     estilo_normal,
 
@@ -3490,8 +3634,13 @@ class InspeccionService:
                     (
                         "<b>ESTADO:</b> "
                         "SEMANA EN CURSO"
+
                         if inicio_semana <= hoy <= fin_semana
-                        else "<b>ESTADO:</b> SEMANA CERRADA"
+
+                        else
+
+                        "<b>ESTADO:</b> "
+                        "SEMANA CERRADA"
                     ),
 
                     estilo_normal,
@@ -3652,7 +3801,7 @@ class InspeccionService:
         filas_componentes = []
 
         # =========================================================
-        # CONSTRUIR TABLA
+        # CONSTRUIR MATRIZ
         # =========================================================
 
         for nombre_categoria, datos_categoria in categorias_ordenadas:
@@ -3716,25 +3865,25 @@ class InspeccionService:
                         fecha
                     )
 
-                    # =================================================
+                    # =============================================
                     # FUTURO
-                    # =================================================
+                    # =============================================
 
                     if fecha > hoy:
 
                         marca = ""
 
-                    # =================================================
+                    # =============================================
                     # SIN INSPECCIÓN
-                    # =================================================
+                    # =============================================
 
                     elif valor is None:
 
                         marca = ""
 
-                    # =================================================
+                    # =============================================
                     # CON RESPUESTA
-                    # =================================================
+                    # =============================================
 
                     else:
 
@@ -3802,6 +3951,12 @@ class InspeccionService:
                 )
 
         # =========================================================
+        # GUARDAR ÚLTIMA FILA DE LA MATRIZ
+        # =========================================================
+
+        fila_final_matriz = len(filas) - 1
+
+        # =========================================================
         # ANCHOS
         # =========================================================
 
@@ -3817,6 +3972,461 @@ class InspeccionService:
             - ancho_item
 
         ) / cantidad_dias
+
+        # =========================================================
+        # OBTENER INSPECCIONES POR DÍA
+        # =========================================================
+
+        inspecciones_por_dia = {}
+
+        for fecha_dia in dias_semana:
+
+            inspecciones_dia = [
+
+                inspeccion
+
+                for inspeccion in inspecciones
+
+                if (
+
+                    inspeccion.hora_inicio
+
+                    and
+                    inspeccion.hora_inicio.date()
+                    == fecha_dia
+
+                )
+
+            ]
+
+            inspecciones_dia.sort(
+                key=lambda x: x.hora_inicio
+            )
+
+            inspecciones_por_dia[
+                fecha_dia
+            ] = inspecciones_dia
+
+        # =========================================================
+        # FILA DE SEPARACIÓN - CONTROL DIARIO
+        # =========================================================
+
+        fila_control_diario = [
+
+            Paragraph(
+                (
+                    "<b>CONTROL DIARIO DE "
+                    "HORÓMETRO</b>"
+                    if es_maquinaria
+                    else
+                    "<b>CONTROL DIARIO DE "
+                    "KILOMETRAJE</b>"
+                ),
+                estilo_componente
+            )
+
+        ]
+
+        for _ in dias_semana:
+
+            fila_control_diario.append("")
+
+        filas.append(
+            fila_control_diario
+        )
+
+        fila_control_diario_index = len(filas) - 1
+
+        # =========================================================
+        # FILA KM/HORÓMETRO INICIAL
+        # =========================================================
+
+        fila_inicial = [
+
+            Paragraph(
+                (
+                    "<b>HORÓMETRO INICIAL</b>"
+                    if es_maquinaria
+                    else
+                    "<b>KM INICIAL</b>"
+                ),
+                estilo_item
+            )
+
+        ]
+
+        # =========================================================
+        # FILA KM/HORÓMETRO FINAL
+        # =========================================================
+
+        fila_final = [
+
+            Paragraph(
+                (
+                    "<b>HORÓMETRO FINAL</b>"
+                    if es_maquinaria
+                    else
+                    "<b>KM FINAL</b>"
+                ),
+                estilo_item
+            )
+
+        ]
+
+        # =========================================================
+        # FILA FIRMA
+        # =========================================================
+
+        fila_firma = [
+
+            Paragraph(
+                "<b>FIRMA</b>",
+                estilo_item
+            )
+
+        ]
+
+        # =========================================================
+        # CONSTRUIR INFORMACIÓN DE LOS 7 DÍAS
+        # =========================================================
+
+        for fecha_dia in dias_semana:
+
+            inspecciones_dia = (
+                inspecciones_por_dia.get(
+                    fecha_dia,
+                    []
+                )
+            )
+
+            # =====================================================
+            # SIN INSPECCIÓN
+            # =====================================================
+
+            if not inspecciones_dia:
+
+                fila_inicial.append(
+
+                    Paragraph(
+                        "—",
+                        estilo_normal
+                    )
+
+                )
+
+                fila_final.append(
+
+                    Paragraph(
+                        "—",
+                        estilo_normal
+                    )
+
+                )
+
+                fila_firma.append(
+
+                    Paragraph(
+                        "SIN REGISTRO",
+                        estilo_normal
+                    )
+
+                )
+
+                continue
+
+            # =====================================================
+            # PRIMERA INSPECCIÓN DEL DÍA
+            # =====================================================
+
+            primera = inspecciones_dia[0]
+
+            # =====================================================
+            # ÚLTIMA INSPECCIÓN DEL DÍA
+            # =====================================================
+
+            ultima = inspecciones_dia[-1]
+
+            # =====================================================
+            # CONTADOR INICIAL
+            # =====================================================
+
+            contador_inicial = (
+
+                primera.contador_inicial
+
+                if primera.contador_inicial is not None
+
+                else None
+
+            )
+
+            # =====================================================
+            # CONTADOR FINAL
+            # =====================================================
+
+            contador_final = (
+
+                ultima.contador_final
+
+                if ultima.contador_final is not None
+
+                else None
+
+            )
+
+            # =====================================================
+            # FORMATEAR INICIAL
+            # =====================================================
+
+            if contador_inicial is not None:
+
+                try:
+
+                    contador_inicial = (
+
+                        f"{float(contador_inicial):,.0f}"
+                        .replace(",", ".")
+
+                    )
+
+                except (
+                    ValueError,
+                    TypeError
+                ):
+
+                    contador_inicial = str(
+                        contador_inicial
+                    )
+
+            else:
+
+                contador_inicial = "—"
+
+            # =====================================================
+            # FORMATEAR FINAL
+            # =====================================================
+
+            if contador_final is not None:
+
+                try:
+
+                    contador_final = (
+
+                        f"{float(contador_final):,.0f}"
+                        .replace(",", ".")
+
+                    )
+
+                except (
+                    ValueError,
+                    TypeError
+                ):
+
+                    contador_final = str(
+                        contador_final
+                    )
+
+            else:
+
+                contador_final = "—"
+
+            # =====================================================
+            # AGREGAR INICIAL
+            # =====================================================
+
+            if es_maquinaria:
+
+                fila_inicial.append(
+
+                    Paragraph(
+                        f"{contador_inicial} h",
+                        estilo_normal
+                    )
+
+                )
+
+            else:
+
+                fila_inicial.append(
+
+                    Paragraph(
+                        contador_inicial,
+                        estilo_normal
+                    )
+
+                )
+
+            # =====================================================
+            # AGREGAR FINAL
+            # =====================================================
+
+            if es_maquinaria:
+
+                fila_final.append(
+
+                    Paragraph(
+                        f"{contador_final} h",
+                        estilo_normal
+                    )
+
+                )
+
+            else:
+
+                fila_final.append(
+
+                    Paragraph(
+                        contador_final,
+                        estilo_normal
+                    )
+
+                )
+
+            # =====================================================
+            # OBTENER FIRMA DEL DÍA
+            # =====================================================
+
+            ruta_firma = ultima.firma_path
+
+            imagen_firma = None
+
+            if ruta_firma:
+
+                try:
+
+                    ruta_firma_normalizada = (
+
+                        str(ruta_firma)
+                        .replace("\\", os.sep)
+                        .replace("/", os.sep)
+
+                    )
+
+                    # ---------------------------------------------
+                    # RUTA ABSOLUTA
+                    # ---------------------------------------------
+
+                    if os.path.isabs(
+                        ruta_firma_normalizada
+                    ):
+
+                        posibles_rutas = [
+
+                            ruta_firma_normalizada
+
+                        ]
+
+                    else:
+
+                        ruta_relativa = (
+                            ruta_firma_normalizada
+                            .lstrip("/\\")
+                        )
+
+                        posibles_rutas = [
+
+                            ruta_relativa,
+
+                            os.path.join(
+                                current_app.root_path,
+                                ruta_relativa
+                            ),
+
+                        ]
+
+                    # ---------------------------------------------
+                    # BUSCAR FIRMA
+                    # ---------------------------------------------
+
+                    ruta_real_firma = None
+
+                    for ruta_posible in posibles_rutas:
+
+                        if os.path.exists(
+                            ruta_posible
+                        ):
+
+                            ruta_real_firma = (
+                                ruta_posible
+                            )
+
+                            break
+
+                    # ---------------------------------------------
+                    # CREAR IMAGEN
+                    # ---------------------------------------------
+
+                    if ruta_real_firma:
+
+                        imagen_firma = RLImage(
+
+                            ruta_real_firma,
+
+                            width=42,
+                            height=20
+
+                        )
+
+                        imagen_firma.hAlign = (
+                            "CENTER"
+                        )
+
+                except Exception as e:
+
+                    current_app.logger.warning(
+
+                        "No se pudo cargar la firma "
+                        f"de la inspección "
+                        f"{ultima.id}: {str(e)}"
+
+                    )
+
+            # =====================================================
+            # AGREGAR FIRMA
+            # =====================================================
+
+            if imagen_firma:
+
+                fila_firma.append(
+                    imagen_firma
+                )
+
+            else:
+
+                fila_firma.append(
+
+                    Paragraph(
+                        "SIN FIRMA",
+                        estilo_normal
+                    )
+
+                )
+
+        # =========================================================
+        # AGREGAR LAS FILAS DIARIAS A LA MISMA MATRIZ
+        # =========================================================
+
+        filas.append(
+            fila_inicial
+        )
+
+        fila_inicial_index = len(filas) - 1
+
+        filas.append(
+            fila_final
+        )
+
+        fila_final_index = len(filas) - 1
+
+        filas.append(
+            fila_firma
+        )
+
+        fila_firma_index = len(filas) - 1
+
+        # =========================================================
+        # CREAR TABLA COMPLETA
+        # =========================================================
 
         tabla = Table(
 
@@ -3838,7 +4448,7 @@ class InspeccionService:
         )
 
         # =========================================================
-        # ESTILOS
+        # ESTILOS MATRIZ
         # =========================================================
 
         estilos_tabla = [
@@ -3956,6 +4566,11 @@ class InspeccionService:
         # =========================================================
         # MARCAR DÍAS FUTUROS
         # =========================================================
+        #
+        # IMPORTANTE:
+        # Solo se aplica hasta la matriz de preguntas.
+        # No se pinta la sección de KM/FIRMA.
+        # =========================================================
 
         for indice_dia, fecha in enumerate(
             dias_semana,
@@ -3969,17 +4584,157 @@ class InspeccionService:
                     (
                         "BACKGROUND",
                         (indice_dia, 1),
-                        (indice_dia, -1),
+                        (
+                            indice_dia,
+                            fila_final_matriz
+                        ),
                         GRIS_FUTURO,
                     )
 
                 )
+
+        # =========================================================
+        # FILA CONTROL DIARIO
+        # =========================================================
+
+        estilos_tabla.extend([
+
+            (
+                "SPAN",
+                (0, fila_control_diario_index),
+                (-1, fila_control_diario_index),
+            ),
+
+            (
+                "BACKGROUND",
+                (0, fila_control_diario_index),
+                (-1, fila_control_diario_index),
+                AZUL_MUY_CLARO,
+            ),
+
+            (
+                "TEXTCOLOR",
+                (0, fila_control_diario_index),
+                (-1, fila_control_diario_index),
+                AZUL_OSCURO,
+            ),
+
+            (
+                "ALIGN",
+                (0, fila_control_diario_index),
+                (-1, fila_control_diario_index),
+                "CENTER",
+            ),
+
+            (
+                "TOPPADDING",
+                (0, fila_control_diario_index),
+                (-1, fila_control_diario_index),
+                4,
+            ),
+
+            (
+                "BOTTOMPADDING",
+                (0, fila_control_diario_index),
+                (-1, fila_control_diario_index),
+                4,
+            ),
+
+        ])
+
+        # =========================================================
+        # FILAS DIARIAS
+        # =========================================================
+
+        for fila_diaria in [
+
+            fila_inicial_index,
+            fila_final_index,
+            fila_firma_index,
+
+        ]:
+
+            estilos_tabla.extend([
+
+                (
+                    "BACKGROUND",
+                    (0, fila_diaria),
+                    (0, fila_diaria),
+                    AZUL_MUY_CLARO,
+                ),
+
+                (
+                    "TEXTCOLOR",
+                    (0, fila_diaria),
+                    (0, fila_diaria),
+                    AZUL_OSCURO,
+                ),
+
+                (
+                    "VALIGN",
+                    (0, fila_diaria),
+                    (-1, fila_diaria),
+                    "MIDDLE",
+                ),
+
+                (
+                    "ALIGN",
+                    (1, fila_diaria),
+                    (-1, fila_diaria),
+                    "CENTER",
+                ),
+
+                (
+                    "TOPPADDING",
+                    (0, fila_diaria),
+                    (-1, fila_diaria),
+                    3,
+                ),
+
+                (
+                    "BOTTOMPADDING",
+                    (0, fila_diaria),
+                    (-1, fila_diaria),
+                    3,
+                ),
+
+            ])
+
+        # =========================================================
+        # FIRMA
+        # =========================================================
+
+        estilos_tabla.extend([
+
+            (
+                "TOPPADDING",
+                (1, fila_firma_index),
+                (-1, fila_firma_index),
+                2,
+            ),
+
+            (
+                "BOTTOMPADDING",
+                (1, fila_firma_index),
+                (-1, fila_firma_index),
+                2,
+            ),
+
+        ])
+
+        # =========================================================
+        # APLICAR ESTILOS
+        # =========================================================
 
         tabla.setStyle(
             TableStyle(
                 estilos_tabla
             )
         )
+
+        # =========================================================
+        # AGREGAR MATRIZ COMPLETA
+        # =========================================================
 
         elementos.append(
             tabla
@@ -3990,181 +4745,44 @@ class InspeccionService:
         )
 
         # =========================================================
-        # KILOMETRAJE
-        # =========================================================
-
-        inspecciones_semana = [
-
-            i
-            for i in inspecciones
-
-            if (
-                inicio_semana
-                <= i.hora_inicio.date()
-                <= fin_semana
-            )
-
-        ]
-
-        inspecciones_semana.sort(
-            key=lambda x: x.hora_inicio
-        )
-
-        primera_inspeccion = (
-            inspecciones_semana[0]
-            if inspecciones_semana
-            else None
-        )
-
-        ultima_inspeccion = (
-            inspecciones_semana[-1]
-            if inspecciones_semana
-            else None
-        )
-
-        kilometraje_inicial = (
-
-            primera_inspeccion.contador_inicial
-
-            if primera_inspeccion
-
-            and primera_inspeccion.contador_inicial
-            is not None
-
-            else ""
-
-        )
-
-        kilometraje_final = (
-
-            ultima_inspeccion.contador_final
-
-            if ultima_inspeccion
-
-            and ultima_inspeccion.contador_final
-            is not None
-
-            else ""
-
-        )
-
-        kilometraje = Table(
-
-            [[
-
-                Paragraph(
-                    "<b>KILOMETRAJE INICIAL</b>",
-                    estilo_header
-                ),
-
-                str(
-                    kilometraje_inicial
-                ),
-
-                Paragraph(
-                    "<b>KILOMETRAJE FINAL</b>",
-                    estilo_header
-                ),
-
-                str(
-                    kilometraje_final
-                ),
-
-            ]],
-
-            colWidths=[
-
-                150,
-                220,
-                150,
-                180,
-
-            ],
-
-        )
-
-        kilometraje.setStyle(
-
-            TableStyle([
-
-                (
-                    "GRID",
-                    (0, 0),
-                    (-1, -1),
-                    0.4,
-                    colors.black,
-                ),
-
-                (
-                    "BACKGROUND",
-                    (0, 0),
-                    (0, 0),
-                    AZUL_MUY_CLARO,
-                ),
-
-                (
-                    "BACKGROUND",
-                    (2, 0),
-                    (2, 0),
-                    AZUL_MUY_CLARO,
-                ),
-
-                (
-                    "TEXTCOLOR",
-                    (0, 0),
-                    (-1, -1),
-                    AZUL_OSCURO,
-                ),
-
-                (
-                    "ALIGN",
-                    (0, 0),
-                    (-1, -1),
-                    "CENTER",
-                ),
-
-                (
-                    "VALIGN",
-                    (0, 0),
-                    (-1, -1),
-                    "MIDDLE",
-                ),
-
-            ])
-
-        )
-
-        elementos.append(
-            kilometraje
-        )
-
-        elementos.append(
-            Spacer(1, 5)
-        )
-
-        # =========================================================
         # OBSERVACIONES
         # =========================================================
 
         observaciones_texto = []
 
-        for inspeccion in inspecciones_semana:
+        for inspeccion in inspecciones:
 
             if inspeccion.observaciones_generales:
 
+                fecha_observacion = (
+
+                    inspeccion.hora_inicio.strftime(
+                        "%d/%m"
+                    )
+
+                    if inspeccion.hora_inicio
+
+                    else ""
+
+                )
+
                 observaciones_texto.append(
 
-                    f"{inspeccion.hora_inicio.strftime('%d/%m')} - "
+                    f"{fecha_observacion} - "
                     f"{inspeccion.observaciones_generales}"
 
                 )
 
         texto_observaciones = (
+
             "<br/>".join(
                 observaciones_texto
             )
+
             if observaciones_texto
+
             else ""
+
         )
 
         observaciones = Table(
@@ -4192,7 +4810,7 @@ class InspeccionService:
             ],
 
             colWidths=[
-                700
+                ancho_total
             ],
 
             rowHeights=[
@@ -4241,46 +4859,45 @@ class InspeccionService:
         )
 
         # =========================================================
-        # FIRMA
+        # FUERA DE SERVICIO
         # =========================================================
 
-        firma = Table(
+        fuera_servicio = Table(
 
             [[
-
-                Paragraph(
-                    "<b>FIRMA DIARIA "
-                    "CONDUCTOR / OPERADOR</b>",
-                    estilo_header
-                ),
-
-                "",
 
                 Paragraph(
                     "<b>FUERA DE SERVICIO</b>",
                     estilo_header
                 ),
 
-                "SI ______  NO ______",
+                Paragraph(
+                    "SI ______",
+                    estilo_normal
+                ),
+
+                Paragraph(
+                    "NO ______",
+                    estilo_normal
+                ),
 
             ]],
 
             colWidths=[
 
-                180,
-                220,
-                130,
-                170,
+                250,
+                250,
+                250,
 
             ],
 
             rowHeights=[
-                35
+                30
             ],
 
         )
 
-        firma.setStyle(
+        fuera_servicio.setStyle(
 
             TableStyle([
 
@@ -4296,13 +4913,6 @@ class InspeccionService:
                     "BACKGROUND",
                     (0, 0),
                     (0, 0),
-                    AZUL_MUY_CLARO,
-                ),
-
-                (
-                    "BACKGROUND",
-                    (2, 0),
-                    (2, 0),
                     AZUL_MUY_CLARO,
                 ),
 
@@ -4332,7 +4942,7 @@ class InspeccionService:
         )
 
         elementos.append(
-            firma
+            fuera_servicio
         )
 
         # =========================================================
@@ -4346,9 +4956,6 @@ class InspeccionService:
         buffer.seek(0)
 
         return buffer
-    
-    
-    
     
     @staticmethod
     def descargar_excel_preoperacionales(

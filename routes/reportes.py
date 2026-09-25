@@ -7,7 +7,8 @@ from flask import (
 from openpyxl.drawing.image import Image
 from datetime import (
     datetime,
-    timedelta
+    timedelta,
+    date,
 )
 
 from io import BytesIO
@@ -32,7 +33,10 @@ from models import (
     Mantenimiento,
     MaquinariaMantenimiento,
     Vehiculo,
-    Maquinaria
+    Maquinaria,
+    PlanItem,
+    VehiculoPlanItem,
+    MaquinariaPlanItem
 )
 
 reportes_bp = Blueprint(
@@ -1736,3 +1740,2516 @@ def exportar_formato_alertas(vehiculo_id):
         as_attachment=True,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
+    
+    
+    
+   
+# =====================================================
+# INDICADOR - CUMPLIMIENTO DE MANTENIMIENTO
+# =====================================================
+
+from datetime import timedelta
+
+
+@reportes_bp.route(
+    '/indicador-mantenimiento',
+    methods=['GET']
+)
+def indicador_mantenimiento():
+
+    inicio, fin = obtener_rango_fechas()
+
+    # =================================================
+    # NORMALIZAR FECHAS
+    # =================================================
+
+    if hasattr(inicio, "date"):
+        fecha_inicio = inicio.date()
+    else:
+        fecha_inicio = inicio
+
+    if hasattr(fin, "date"):
+        fecha_fin = fin.date()
+    else:
+        fecha_fin = fin
+
+    # =================================================
+    # FILTROS
+    # =================================================
+
+    vehiculo_id = request.args.get(
+        'vehiculo_id',
+        type=int
+    )
+
+    maquinaria_id = request.args.get(
+        'maquinaria_id',
+        type=int
+    )
+
+    # =================================================
+    # 1. ALERTAS DE MANTENIMIENTO REPORTADAS
+    # =================================================
+    #
+    # Una alerta MANTENIMIENTO representa una
+    # actividad/necesidad reportada.
+    #
+    # IMPORTANTE:
+    # Se utiliza created_at porque representa el
+    # momento en que fue creada/reportada la alerta.
+    #
+    # No se utiliza fecha_evento porque puede contener
+    # fechas históricas o cambiar cuando el sistema
+    # vuelve a generar/revisar la alerta.
+    # =================================================
+
+    query_alertas = Alerta.query.filter(
+        Alerta.tipo == 'MANTENIMIENTO',
+        Alerta.created_at >= fecha_inicio,
+        Alerta.created_at < (
+            fecha_fin + timedelta(days=1)
+        )
+    )
+
+    # =================================================
+    # FILTRO VEHÍCULO
+    # =================================================
+
+    if vehiculo_id:
+
+        query_alertas = query_alertas.filter(
+            Alerta.vehiculo_id == vehiculo_id
+        )
+
+    # =================================================
+    # FILTRO MAQUINARIA
+    # =================================================
+
+    if maquinaria_id:
+
+        query_alertas = query_alertas.filter(
+            Alerta.maquinaria_id == maquinaria_id
+        )
+
+    alertas_mantenimiento = query_alertas.all()
+
+    # =================================================
+    # 2. OBTENER TIPOS DE PLAN ITEM
+    # =================================================
+
+    plan_item_ids = {
+        alerta.plan_item_id
+        for alerta in alertas_mantenimiento
+        if alerta.plan_item_id is not None
+    }
+
+    tipos_plan_item = {}
+
+    if plan_item_ids:
+
+        registros_plan = PlanItem.query.filter(
+            PlanItem.id.in_(plan_item_ids)
+        ).all()
+
+        tipos_plan_item = {
+            plan.id: (
+                plan.tipo_mantenimiento or ''
+            ).upper()
+            for plan in registros_plan
+        }
+
+    # =================================================
+    # 3. CLASIFICAR ALERTAS
+    # =================================================
+    #
+    # IMPORTANTE:
+    #
+    # PREVENTIVO:
+    #   Solo alertas PREVENTIVO
+    #
+    # INSPECCION:
+    #   Solo alertas INSPECCION
+    #
+    # CORRECTIVO:
+    #   Solo alertas CORRECTIVO
+    #
+    # Las inspecciones NO se suman al preventivo
+    # en este endpoint.
+    #
+    # La suma PREVENTIVO + INSPECCION se realizará
+    # únicamente en el Excel HSEQ-R-159.
+    # =================================================
+
+    alertas_preventivas = []
+    alertas_inspecciones = []
+    alertas_correctivas = []
+
+    for alerta in alertas_mantenimiento:
+
+        tipo = tipos_plan_item.get(
+            alerta.plan_item_id,
+            ''
+        )
+
+        # -------------------------------------------------
+        # PREVENTIVO
+        # -------------------------------------------------
+
+        if tipo == 'PREVENTIVO':
+
+            alertas_preventivas.append(
+                alerta
+            )
+
+        # -------------------------------------------------
+        # INSPECCION
+        # -------------------------------------------------
+
+        elif tipo == 'INSPECCION':
+
+            alertas_inspecciones.append(
+                alerta
+            )
+
+        # -------------------------------------------------
+        # CORRECTIVO
+        # -------------------------------------------------
+
+        elif tipo == 'CORRECTIVO':
+
+            alertas_correctivas.append(
+                alerta
+            )
+
+    # =================================================
+    # 4. MANTENIMIENTOS REALMENTE EJECUTADOS
+    # =================================================
+    #
+    # NO utilizamos Alerta.estado para determinar
+    # si el mantenimiento fue ejecutado.
+    #
+    # Utilizamos los registros reales de:
+    #
+    #   mantenimientos
+    #   maquinaria_mantenimientos
+    #
+    # con completado = True.
+    # =================================================
+
+    # =================================================
+    # 4.1 MANTENIMIENTOS DE VEHÍCULOS
+    # =================================================
+
+    query_mantenimientos = Mantenimiento.query.filter(
+        Mantenimiento.fecha >= fecha_inicio,
+        Mantenimiento.fecha <= fecha_fin,
+        Mantenimiento.completado == True
+    )
+
+    if vehiculo_id:
+
+        query_mantenimientos = (
+            query_mantenimientos.filter(
+                Mantenimiento.vehiculo_id == vehiculo_id
+            )
+        )
+
+    mantenimientos_vehiculos = (
+        query_mantenimientos.all()
+    )
+
+    # =================================================
+    # 4.2 MANTENIMIENTOS DE MAQUINARIA
+    # =================================================
+
+    query_mantenimientos_maquinaria = (
+        MaquinariaMantenimiento.query.filter(
+            MaquinariaMantenimiento.fecha >= fecha_inicio,
+            MaquinariaMantenimiento.fecha <= fecha_fin,
+            MaquinariaMantenimiento.completado == True
+        )
+    )
+
+    if maquinaria_id:
+
+        query_mantenimientos_maquinaria = (
+            query_mantenimientos_maquinaria.filter(
+                MaquinariaMantenimiento.maquinaria_id
+                == maquinaria_id
+            )
+        )
+
+    mantenimientos_maquinaria = (
+        query_mantenimientos_maquinaria.all()
+    )
+
+    # =================================================
+    # 5. CLASIFICAR MANTENIMIENTOS DE VEHÍCULOS
+    # =================================================
+
+    # -------------------------------------------------
+    # PREVENTIVOS
+    # -------------------------------------------------
+
+    mantenimientos_preventivos_vehiculos = [
+        m
+        for m in mantenimientos_vehiculos
+        if (m.tipo or '').upper()
+        == 'PREVENTIVO'
+    ]
+
+    # -------------------------------------------------
+    # INSPECCIONES
+    # -------------------------------------------------
+
+    mantenimientos_inspecciones_vehiculos = [
+        m
+        for m in mantenimientos_vehiculos
+        if (m.tipo or '').upper()
+        == 'INSPECCION'
+    ]
+
+    # -------------------------------------------------
+    # CORRECTIVOS
+    # -------------------------------------------------
+
+    mantenimientos_correctivos_vehiculos = [
+        m
+        for m in mantenimientos_vehiculos
+        if (m.tipo or '').upper()
+        == 'CORRECTIVO'
+    ]
+
+    # =================================================
+    # 6. CLASIFICAR MANTENIMIENTOS DE MAQUINARIA
+    # =================================================
+    #
+    # En la BD actualmente:
+    #
+    #   I = INSPECCION
+    #
+    # También soportamos:
+    #
+    #   INSPECCION
+    #
+    # por si posteriormente se guarda con ese nombre.
+    # =================================================
+
+    # -------------------------------------------------
+    # PREVENTIVOS
+    # -------------------------------------------------
+
+    mantenimientos_preventivos_maquinaria = [
+        m
+        for m in mantenimientos_maquinaria
+        if (m.tipo or '').upper()
+        == 'PREVENTIVO'
+    ]
+
+    # -------------------------------------------------
+    # INSPECCIONES
+    # -------------------------------------------------
+
+    mantenimientos_inspecciones_maquinaria = [
+        m
+        for m in mantenimientos_maquinaria
+        if (m.tipo or '').upper()
+        in [
+            'INSPECCION',
+            'I'
+        ]
+    ]
+
+    # -------------------------------------------------
+    # CORRECTIVOS
+    # -------------------------------------------------
+
+    mantenimientos_correctivos_maquinaria = [
+        m
+        for m in mantenimientos_maquinaria
+        if (m.tipo or '').upper()
+        == 'CORRECTIVO'
+    ]
+
+    # =================================================
+    # 7. INDICADOR PREVENTIVO
+    # =================================================
+    #
+    # IMPORTANTE:
+    #
+    # El indicador de pantalla solamente considera
+    # mantenimientos PREVENTIVOS.
+    #
+    # NO incluye INSPECCIONES.
+    #
+    # REPORTADOS:
+    #   Alertas PREVENTIVO
+    #
+    # EJECUTADOS:
+    #   Mantenimientos PREVENTIVO completados
+    # =================================================
+
+    preventivos_reportados = len(
+        alertas_preventivas
+    )
+
+    preventivos_ejecutados = (
+        len(mantenimientos_preventivos_vehiculos)
+        +
+        len(mantenimientos_preventivos_maquinaria)
+    )
+
+    preventivos_pendientes = max(
+        preventivos_reportados
+        - preventivos_ejecutados,
+        0
+    )
+
+    if preventivos_reportados == 0:
+
+        porcentaje_preventivo = 100
+
+    else:
+
+        porcentaje_preventivo = (
+            preventivos_ejecutados
+            / preventivos_reportados
+        ) * 100
+
+    # =================================================
+    # 8. INDICADOR DE INSPECCIONES
+    # =================================================
+    #
+    # REPORTADAS:
+    #   Alertas INSPECCION
+    #
+    # EJECUTADAS:
+    #   Mantenimientos INSPECCION completados
+    #
+    # Para maquinaria:
+    #   I = INSPECCION
+    # =================================================
+
+    inspecciones_reportadas = len(
+        alertas_inspecciones
+    )
+
+    inspecciones_ejecutadas = (
+        len(mantenimientos_inspecciones_vehiculos)
+        +
+        len(mantenimientos_inspecciones_maquinaria)
+    )
+
+    if inspecciones_reportadas == 0:
+
+        porcentaje_inspecciones = 100
+
+    else:
+
+        porcentaje_inspecciones = (
+            inspecciones_ejecutadas
+            / inspecciones_reportadas
+        ) * 100
+
+    # =================================================
+    # 9. INDICADOR CORRECTIVO
+    # =================================================
+    #
+    # REPORTADOS:
+    #   Alertas CORRECTIVO
+    #
+    # EJECUTADOS:
+    #   Mantenimientos CORRECTIVO completados
+    # =================================================
+
+    correctivos_reportados = len(
+        alertas_correctivas
+    )
+
+    correctivos_ejecutados = (
+        len(mantenimientos_correctivos_vehiculos)
+        +
+        len(mantenimientos_correctivos_maquinaria)
+    )
+
+    if correctivos_reportados == 0:
+
+        porcentaje_correctivo = 100
+
+    else:
+
+        porcentaje_correctivo = (
+            correctivos_ejecutados
+            / correctivos_reportados
+        ) * 100
+
+    # =================================================
+    # 10. DETALLE VEHÍCULOS
+    # =================================================
+
+    alertas_preventivas_vehiculos = [
+        alerta
+        for alerta in alertas_preventivas
+        if alerta.vehiculo_id is not None
+    ]
+
+    alertas_inspecciones_vehiculos = [
+        alerta
+        for alerta in alertas_inspecciones
+        if alerta.vehiculo_id is not None
+    ]
+
+    alertas_correctivas_vehiculos = [
+        alerta
+        for alerta in alertas_correctivas
+        if alerta.vehiculo_id is not None
+    ]
+
+    # =================================================
+    # 11. DETALLE MAQUINARIA
+    # =================================================
+
+    alertas_preventivas_maquinaria = [
+        alerta
+        for alerta in alertas_preventivas
+        if alerta.maquinaria_id is not None
+    ]
+
+    alertas_inspecciones_maquinaria = [
+        alerta
+        for alerta in alertas_inspecciones
+        if alerta.maquinaria_id is not None
+    ]
+
+    alertas_correctivas_maquinaria = [
+        alerta
+        for alerta in alertas_correctivas
+        if alerta.maquinaria_id is not None
+    ]
+
+    # =================================================
+    # 12. RESPUESTA
+    # =================================================
+
+    return jsonify({
+
+        # =================================================
+        # INDICADORES
+        # =================================================
+
+        "indicadores": {
+
+            # ---------------------------------------------
+            # PREVENTIVO
+            # ---------------------------------------------
+
+            "preventivo": {
+
+                "reportados": (
+                    preventivos_reportados
+                ),
+
+                "ejecutados": (
+                    preventivos_ejecutados
+                ),
+
+                "pendientes": (
+                    preventivos_pendientes
+                ),
+
+                "porcentaje": round(
+                    porcentaje_preventivo,
+                    2
+                ),
+
+                "meta": 90,
+
+                "cumple_meta": (
+                    porcentaje_preventivo >= 90
+                ),
+
+                "metodo_calculo": (
+                    "Mantenimientos preventivos "
+                    "ejecutados / alertas preventivas "
+                    "reportadas × 100"
+                )
+            },
+
+            # ---------------------------------------------
+            # INSPECCIONES
+            # ---------------------------------------------
+
+            "inspecciones": {
+
+                "reportadas": (
+                    inspecciones_reportadas
+                ),
+
+                "resueltas": (
+                    inspecciones_ejecutadas
+                ),
+
+                "porcentaje": round(
+                    porcentaje_inspecciones,
+                    2
+                ),
+
+                "metodo_calculo": (
+                    "Inspecciones ejecutadas / "
+                    "alertas de inspección reportadas "
+                    "× 100"
+                )
+            },
+
+            # ---------------------------------------------
+            # CORRECTIVO
+            # ---------------------------------------------
+
+            "correctivo": {
+
+                "mantenimientos_reportados": (
+                    correctivos_reportados
+                ),
+
+                "mantenimientos_cerrados": (
+                    correctivos_ejecutados
+                ),
+
+                "porcentaje": round(
+                    porcentaje_correctivo,
+                    2
+                ),
+
+                "meta": 90,
+
+                "cumple_meta": (
+                    porcentaje_correctivo >= 90
+                ),
+
+                "metodo_calculo": (
+                    "Mantenimientos correctivos "
+                    "ejecutados / alertas correctivas "
+                    "reportadas × 100"
+                )
+            }
+        },
+
+        # =================================================
+        # VEHÍCULOS
+        # =================================================
+
+        "vehiculos": {
+
+            "preventivos_programados": (
+                len(alertas_preventivas_vehiculos)
+            ),
+
+            "preventivos_ejecutados": (
+                len(mantenimientos_preventivos_vehiculos)
+            ),
+
+            "inspecciones": (
+                len(alertas_inspecciones_vehiculos)
+            ),
+
+            "inspecciones_ejecutadas": (
+                len(mantenimientos_inspecciones_vehiculos)
+            ),
+
+            "correctivos": (
+                len(alertas_correctivas_vehiculos)
+            ),
+
+            "correctivos_cerrados": (
+                len(mantenimientos_correctivos_vehiculos)
+            )
+        },
+
+        # =================================================
+        # MAQUINARIA
+        # =================================================
+
+        "maquinaria": {
+
+            "preventivos_programados": (
+                len(alertas_preventivas_maquinaria)
+            ),
+
+            "preventivos_ejecutados": (
+                len(mantenimientos_preventivos_maquinaria)
+            ),
+
+            "inspecciones": (
+                len(alertas_inspecciones_maquinaria)
+            ),
+
+            "inspecciones_ejecutadas": (
+                len(mantenimientos_inspecciones_maquinaria)
+            ),
+
+            "correctivos": (
+                len(alertas_correctivas_maquinaria)
+            ),
+
+            "correctivos_cerrados": (
+                len(mantenimientos_correctivos_maquinaria)
+            )
+        },
+
+        # =================================================
+        # PERIODO
+        # =================================================
+
+        "periodo": {
+
+            "inicio": str(fecha_inicio),
+
+            "fin": str(fecha_fin)
+        },
+
+        # =================================================
+        # FILTROS
+        # =================================================
+
+        "filtros": {
+
+            "vehiculo_id": vehiculo_id,
+
+            "maquinaria_id": maquinaria_id
+        }
+    })
+ 
+@reportes_bp.route(
+    '/indicador-mantenimiento/exportar',
+    methods=['GET']
+)
+def exportar_indicador_mantenimiento():
+
+    try:
+
+        from io import BytesIO
+        import os
+
+        from flask import (
+            request,
+            jsonify,
+            send_file
+        )
+
+        from openpyxl import Workbook
+        from openpyxl.drawing.image import Image
+
+        from openpyxl.styles import (
+            Font,
+            PatternFill,
+            Border,
+            Side,
+            Alignment
+        )
+
+        from openpyxl.worksheet.page import PageMargins
+
+        # ==========================================================
+        # FILTROS
+        # ==========================================================
+
+        tipo = request.args.get(
+            'tipo',
+            'mensual'
+        )
+
+        vehiculo_id = request.args.get(
+            'vehiculo_id'
+        )
+
+        maquinaria_id = request.args.get(
+            'maquinaria_id'
+        )
+
+        fecha_inicio = request.args.get(
+            'fecha_inicio'
+        )
+
+        fecha_fin = request.args.get(
+            'fecha_fin'
+        )
+
+        # ==========================================================
+        # CONVERSIÓN DE IDS
+        # ==========================================================
+
+        if vehiculo_id in ['', 'null', 'None']:
+            vehiculo_id = None
+
+        elif vehiculo_id:
+            vehiculo_id = int(
+                vehiculo_id
+            )
+
+        if maquinaria_id in ['', 'null', 'None']:
+            maquinaria_id = None
+
+        elif maquinaria_id:
+            maquinaria_id = int(
+                maquinaria_id
+            )
+
+        # ==========================================================
+        # FECHAS
+        # ==========================================================
+
+        hoy = date.today()
+
+        if tipo == 'rango':
+
+            if not fecha_inicio or not fecha_fin:
+
+                return jsonify({
+                    'error':
+                        'Debe indicar fecha_inicio y fecha_fin'
+                }), 400
+
+            fecha_inicio_obj = datetime.strptime(
+                fecha_inicio,
+                '%Y-%m-%d'
+            ).date()
+
+            fecha_fin_obj = datetime.strptime(
+                fecha_fin,
+                '%Y-%m-%d'
+            ).date()
+
+        elif tipo == 'diario':
+
+            fecha_inicio_obj = hoy
+            fecha_fin_obj = hoy
+
+        elif tipo == 'semanal':
+
+            fecha_fin_obj = hoy
+
+            fecha_inicio_obj = (
+                hoy - timedelta(days=6)
+            )
+
+        else:
+
+            # ======================================================
+            # MENSUAL
+            # ======================================================
+
+            fecha_inicio_obj = hoy.replace(
+                day=1
+            )
+
+            fecha_fin_obj = hoy
+
+        # ==========================================================
+        # VALIDACIÓN DE FECHAS
+        # ==========================================================
+
+        if fecha_inicio_obj > fecha_fin_obj:
+
+            return jsonify({
+                'error':
+                    'La fecha inicial no puede ser mayor que la fecha final'
+            }), 400
+
+        # ==========================================================
+        # NOMBRE DEL ACTIVO
+        # ==========================================================
+
+        activo = 'Todos los activos'
+
+        if vehiculo_id:
+
+            vehiculo = Vehiculo.query.get(
+                vehiculo_id
+            )
+
+            if vehiculo:
+
+                activo = vehiculo.placa
+
+        elif maquinaria_id:
+
+            maquinaria = Maquinaria.query.get(
+                maquinaria_id
+            )
+
+            if maquinaria:
+
+                activo = maquinaria.codigo
+
+        # ==========================================================
+        # ALERTAS DE MANTENIMIENTO
+        # ==========================================================
+
+        query_alertas = Alerta.query.filter(
+
+            Alerta.tipo == 'MANTENIMIENTO',
+
+            Alerta.created_at >= fecha_inicio_obj,
+
+            Alerta.created_at < (
+                fecha_fin_obj + timedelta(days=1)
+            )
+        )
+
+        if vehiculo_id:
+
+            query_alertas = query_alertas.filter(
+                Alerta.vehiculo_id == vehiculo_id
+            )
+
+        if maquinaria_id:
+
+            query_alertas = query_alertas.filter(
+                Alerta.maquinaria_id == maquinaria_id
+            )
+
+        alertas_mantenimiento = (
+            query_alertas.all()
+        )
+
+        # ==========================================================
+        # OBTENER PLAN ITEMS
+        # ==========================================================
+
+        plan_item_ids = {
+
+            alerta.plan_item_id
+
+            for alerta in alertas_mantenimiento
+
+            if alerta.plan_item_id is not None
+        }
+
+        tipos_plan_item = {}
+
+        if plan_item_ids:
+
+            registros_plan = (
+                PlanItem.query
+                .filter(
+                    PlanItem.id.in_(
+                        plan_item_ids
+                    )
+                )
+                .all()
+            )
+
+            tipos_plan_item = {
+
+                plan.id:
+                    (
+                        plan.tipo_mantenimiento
+                        or ''
+                    ).upper()
+
+                for plan in registros_plan
+            }
+
+        # ==========================================================
+        # CLASIFICAR ALERTAS
+        # ==========================================================
+
+        alertas_preventivas = []
+
+        alertas_inspecciones = []
+
+        alertas_correctivas = []
+
+        for alerta in alertas_mantenimiento:
+
+            tipo_plan = tipos_plan_item.get(
+                alerta.plan_item_id,
+                ''
+            )
+
+            if tipo_plan == 'PREVENTIVO':
+
+                alertas_preventivas.append(
+                    alerta
+                )
+
+            elif tipo_plan == 'INSPECCION':
+
+                alertas_inspecciones.append(
+                    alerta
+                )
+
+            elif tipo_plan == 'CORRECTIVO':
+
+                alertas_correctivas.append(
+                    alerta
+                )
+
+        # ==========================================================
+        # REPORTADOS
+        # ==========================================================
+
+        preventivos_reportados = len(
+            alertas_preventivas
+        )
+
+        inspecciones_reportadas = len(
+            alertas_inspecciones
+        )
+
+        correctivos_reportados = len(
+            alertas_correctivas
+        )
+
+        # ==========================================================
+        # PREVENTIVOS VEHÍCULOS
+        # ==========================================================
+
+        query_preventivos_vehiculos = (
+            Mantenimiento.query.filter(
+
+                Mantenimiento.fecha
+                >= fecha_inicio_obj,
+
+                Mantenimiento.fecha
+                <= fecha_fin_obj,
+
+                Mantenimiento.tipo
+                == 'PREVENTIVO',
+
+                Mantenimiento.completado
+                == True
+            )
+        )
+
+        if vehiculo_id:
+
+            query_preventivos_vehiculos = (
+                query_preventivos_vehiculos.filter(
+                    Mantenimiento.vehiculo_id
+                    == vehiculo_id
+                )
+            )
+
+        preventivos_vehiculos = (
+            query_preventivos_vehiculos.count()
+        )
+
+        # ==========================================================
+        # INSPECCIONES VEHÍCULOS
+        # ==========================================================
+
+        query_inspecciones_vehiculos = (
+            Mantenimiento.query.filter(
+
+                Mantenimiento.fecha
+                >= fecha_inicio_obj,
+
+                Mantenimiento.fecha
+                <= fecha_fin_obj,
+
+                Mantenimiento.tipo
+                == 'INSPECCION',
+
+                Mantenimiento.completado
+                == True
+            )
+        )
+
+        if vehiculo_id:
+
+            query_inspecciones_vehiculos = (
+                query_inspecciones_vehiculos.filter(
+                    Mantenimiento.vehiculo_id
+                    == vehiculo_id
+                )
+            )
+
+        inspecciones_vehiculos = (
+            query_inspecciones_vehiculos.count()
+        )
+
+        # ==========================================================
+        # PREVENTIVOS MAQUINARIA
+        # ==========================================================
+
+        query_preventivos_maquinaria = (
+            MaquinariaMantenimiento.query.filter(
+
+                MaquinariaMantenimiento.fecha
+                >= fecha_inicio_obj,
+
+                MaquinariaMantenimiento.fecha
+                <= fecha_fin_obj,
+
+                MaquinariaMantenimiento.tipo
+                == 'PREVENTIVO',
+
+                MaquinariaMantenimiento.completado
+                == True
+            )
+        )
+
+        if maquinaria_id:
+
+            query_preventivos_maquinaria = (
+                query_preventivos_maquinaria.filter(
+                    MaquinariaMantenimiento.maquinaria_id
+                    == maquinaria_id
+                )
+            )
+
+        preventivos_maquinaria = (
+            query_preventivos_maquinaria.count()
+        )
+
+        # ==========================================================
+        # INSPECCIONES MAQUINARIA
+        # ==========================================================
+        #
+        # En maquinaria pueden existir:
+        #
+        # INSPECCION
+        # I
+        #
+        # ==========================================================
+
+        query_inspecciones_maquinaria = (
+            MaquinariaMantenimiento.query.filter(
+
+                MaquinariaMantenimiento.fecha
+                >= fecha_inicio_obj,
+
+                MaquinariaMantenimiento.fecha
+                <= fecha_fin_obj,
+
+                MaquinariaMantenimiento.completado
+                == True
+            )
+        )
+
+        if maquinaria_id:
+
+            query_inspecciones_maquinaria = (
+                query_inspecciones_maquinaria.filter(
+                    MaquinariaMantenimiento.maquinaria_id
+                    == maquinaria_id
+                )
+            )
+
+        inspecciones_maquinaria_lista = [
+
+            mantenimiento
+
+            for mantenimiento
+            in query_inspecciones_maquinaria.all()
+
+            if (
+                (mantenimiento.tipo or '').upper()
+                in [
+                    'INSPECCION',
+                    'I'
+                ]
+            )
+        ]
+
+        inspecciones_maquinaria = len(
+            inspecciones_maquinaria_lista
+        )
+
+        # ==========================================================
+        # PREVENTIVO HSEQ
+        # ==========================================================
+        #
+        # IMPORTANTE:
+        #
+        # Para el Excel HSEQ-R-159:
+        #
+        # PREVENTIVO =
+        #
+        # PREVENTIVOS + INSPECCIONES
+        #
+        # ==========================================================
+
+        preventivos_programados = (
+
+            preventivos_reportados
+
+            + inspecciones_reportadas
+        )
+
+        preventivos_ejecutados = (
+
+            preventivos_vehiculos
+
+            + preventivos_maquinaria
+
+            + inspecciones_vehiculos
+
+            + inspecciones_maquinaria
+        )
+
+        # ==========================================================
+        # CORRECTIVOS VEHÍCULOS REPORTADOS
+        # ==========================================================
+
+        query_correctivos_vehiculos = (
+            Mantenimiento.query.filter(
+
+                Mantenimiento.fecha
+                >= fecha_inicio_obj,
+
+                Mantenimiento.fecha
+                <= fecha_fin_obj,
+
+                Mantenimiento.tipo
+                == 'CORRECTIVO'
+            )
+        )
+
+        if vehiculo_id:
+
+            query_correctivos_vehiculos = (
+                query_correctivos_vehiculos.filter(
+                    Mantenimiento.vehiculo_id
+                    == vehiculo_id
+                )
+            )
+
+        correctivos_vehiculos_reportados = (
+            query_correctivos_vehiculos.count()
+        )
+
+        # ==========================================================
+        # CORRECTIVOS VEHÍCULOS CERRADOS
+        # ==========================================================
+
+        query_correctivos_vehiculos_cerrados = (
+            Mantenimiento.query.filter(
+
+                Mantenimiento.fecha
+                >= fecha_inicio_obj,
+
+                Mantenimiento.fecha
+                <= fecha_fin_obj,
+
+                Mantenimiento.tipo
+                == 'CORRECTIVO',
+
+                Mantenimiento.completado
+                == True
+            )
+        )
+
+        if vehiculo_id:
+
+            query_correctivos_vehiculos_cerrados = (
+                query_correctivos_vehiculos_cerrados.filter(
+                    Mantenimiento.vehiculo_id
+                    == vehiculo_id
+                )
+            )
+
+        correctivos_vehiculos_cerrados = (
+            query_correctivos_vehiculos_cerrados.count()
+        )
+
+        # ==========================================================
+        # CORRECTIVOS MAQUINARIA REPORTADOS
+        # ==========================================================
+
+        query_correctivos_maquinaria_reportados = (
+            MaquinariaMantenimiento.query.filter(
+
+                MaquinariaMantenimiento.fecha
+                >= fecha_inicio_obj,
+
+                MaquinariaMantenimiento.fecha
+                <= fecha_fin_obj,
+
+                MaquinariaMantenimiento.tipo
+                == 'CORRECTIVO'
+            )
+        )
+
+        if maquinaria_id:
+
+            query_correctivos_maquinaria_reportados = (
+                query_correctivos_maquinaria_reportados.filter(
+                    MaquinariaMantenimiento.maquinaria_id
+                    == maquinaria_id
+                )
+            )
+
+        correctivos_maquinaria_reportados = (
+            query_correctivos_maquinaria_reportados.count()
+        )
+
+        # ==========================================================
+        # CORRECTIVOS MAQUINARIA CERRADOS
+        # ==========================================================
+
+        query_correctivos_maquinaria_cerrados = (
+            MaquinariaMantenimiento.query.filter(
+
+                MaquinariaMantenimiento.fecha
+                >= fecha_inicio_obj,
+
+                MaquinariaMantenimiento.fecha
+                <= fecha_fin_obj,
+
+                MaquinariaMantenimiento.tipo
+                == 'CORRECTIVO',
+
+                MaquinariaMantenimiento.completado
+                == True
+            )
+        )
+
+        if maquinaria_id:
+
+            query_correctivos_maquinaria_cerrados = (
+                query_correctivos_maquinaria_cerrados.filter(
+                    MaquinariaMantenimiento.maquinaria_id
+                    == maquinaria_id
+                )
+            )
+
+        correctivos_maquinaria_cerrados = (
+            query_correctivos_maquinaria_cerrados.count()
+        )
+
+        # ==========================================================
+        # CORRECTIVOS TOTALES
+        # ==========================================================
+
+        correctivos_reportados = (
+
+            correctivos_vehiculos_reportados
+
+            + correctivos_maquinaria_reportados
+        )
+
+        correctivos_cerrados = (
+
+            correctivos_vehiculos_cerrados
+
+            + correctivos_maquinaria_cerrados
+        )
+
+        # ==========================================================
+        # PORCENTAJE PREVENTIVO
+        # ==========================================================
+
+        if preventivos_programados > 0:
+
+            porcentaje_preventivo = (
+
+                preventivos_ejecutados
+                /
+                preventivos_programados
+
+            ) * 100
+
+        else:
+
+            porcentaje_preventivo = 0
+
+        # ==========================================================
+        # PORCENTAJE CORRECTIVO
+        # ==========================================================
+
+        if correctivos_reportados > 0:
+
+            porcentaje_correctivo = (
+
+                correctivos_cerrados
+                /
+                correctivos_reportados
+
+            ) * 100
+
+        else:
+
+            porcentaje_correctivo = 0
+
+        # ==========================================================
+        # PORCENTAJE INSPECCIONES
+        # ==========================================================
+
+        inspecciones_ejecutadas = (
+
+            inspecciones_vehiculos
+
+            + inspecciones_maquinaria
+        )
+
+        if inspecciones_reportadas > 0:
+
+            porcentaje_inspecciones = (
+
+                inspecciones_ejecutadas
+                /
+                inspecciones_reportadas
+
+            ) * 100
+
+        else:
+
+            porcentaje_inspecciones = 0
+
+        # ==========================================================
+        # LIMITAR PORCENTAJES
+        # ==========================================================
+
+        porcentaje_preventivo = min(
+            porcentaje_preventivo,
+            100
+        )
+
+        porcentaje_correctivo = min(
+            porcentaje_correctivo,
+            100
+        )
+
+        porcentaje_inspecciones = min(
+            porcentaje_inspecciones,
+            100
+        )
+
+        # ==========================================================
+        # ESTADOS
+        # ==========================================================
+
+        cumple_preventivo = (
+            porcentaje_preventivo >= 90
+        )
+
+        cumple_correctivo = (
+            porcentaje_correctivo >= 90
+        )
+
+        cumple_inspecciones = (
+            porcentaje_inspecciones >= 90
+        )
+
+        # ==========================================================
+        # CREAR EXCEL
+        # ==========================================================
+
+        wb = Workbook()
+
+        ws = wb.active
+
+        ws.title = 'HSEQ-R-159'
+
+        ws.sheet_view.showGridLines = False
+
+        # ==========================================================
+        # COLUMNAS
+        # ==========================================================
+
+        columnas = {
+
+            'A': 24,
+            'B': 18,
+            'C': 18,
+            'D': 18,
+            'E': 18,
+            'F': 18,
+            'G': 18,
+            'H': 18,
+            'I': 18,
+            'J': 18
+
+        }
+
+        for col, width in columnas.items():
+
+            ws.column_dimensions[
+                col
+            ].width = width
+
+        # ==========================================================
+        # COLORES
+        # ==========================================================
+
+        azul_oscuro = PatternFill(
+            start_color='1F4E78',
+            end_color='1F4E78',
+            fill_type='solid'
+        )
+
+        azul_header = PatternFill(
+            start_color='8DB4E2',
+            end_color='8DB4E2',
+            fill_type='solid'
+        )
+
+        azul_claro = PatternFill(
+            start_color='D9EAF7',
+            end_color='D9EAF7',
+            fill_type='solid'
+        )
+
+        gris = PatternFill(
+            start_color='F2F2F2',
+            end_color='F2F2F2',
+            fill_type='solid'
+        )
+
+        verde = PatternFill(
+            start_color='E2F0D9',
+            end_color='E2F0D9',
+            fill_type='solid'
+        )
+
+        rojo = PatternFill(
+            start_color='F4CCCC',
+            end_color='F4CCCC',
+            fill_type='solid'
+        )
+
+        # ==========================================================
+        # BORDES
+        # ==========================================================
+
+        thin = Side(
+            style='thin',
+            color='B7B7B7'
+        )
+
+        border = Border(
+            left=thin,
+            right=thin,
+            top=thin,
+            bottom=thin
+        )
+
+        # ==========================================================
+        # FUENTES
+        # ==========================================================
+
+        titulo_font = Font(
+            bold=True,
+            color='FFFFFF',
+            size=14
+        )
+
+        subtitulo_font = Font(
+            bold=True,
+            color='1F1F1F',
+            size=12
+        )
+
+        blanco_negrita = Font(
+            bold=True,
+            color='FFFFFF',
+            size=10
+        )
+
+        negrita = Font(
+            bold=True,
+            color='1F1F1F',
+            size=10
+        )
+
+        normal = Font(
+            color='333333',
+            size=10
+        )
+
+        # ==========================================================
+        # ALINEACIONES
+        # ==========================================================
+
+        center = Alignment(
+            horizontal='center',
+            vertical='center',
+            wrap_text=True
+        )
+
+        left = Alignment(
+            horizontal='left',
+            vertical='center',
+            wrap_text=True
+        )
+
+        # ==========================================================
+        # ENCABEZADO
+        # ==========================================================
+
+        ws.row_dimensions[1].height = 35
+        ws.row_dimensions[2].height = 30
+        ws.row_dimensions[3].height = 30
+
+        # ==========================================================
+        # LOGO
+        # ==========================================================
+
+        ws.merge_cells(
+            'A1:B3'
+        )
+
+        for row in ws['A1:B3']:
+
+            for cell in row:
+
+                cell.fill = azul_oscuro
+                cell.border = border
+
+        ruta_logo = (
+            'static/logo_transmena.jpg'
+        )
+
+        if os.path.exists(ruta_logo):
+
+            logo = Image(
+                ruta_logo
+            )
+
+            logo.width = 190
+            logo.height = 85
+
+            ws.add_image(
+                logo,
+                'A1'
+            )
+
+        else:
+
+            ws['A1'] = 'TRANSMENA'
+
+            ws['A1'].font = titulo_font
+
+            ws['A1'].alignment = center
+
+        # ==========================================================
+        # TÍTULO PRINCIPAL
+        # ==========================================================
+
+        ws.merge_cells(
+            'C1:H2'
+        )
+
+        ws['C1'] = (
+            'MATRIZ DE INDICADORES DE RESOLUCION  40595 DE 2022'
+        )
+
+        ws['C1'].fill = azul_oscuro
+        ws['C1'].font = titulo_font
+        ws['C1'].alignment = center
+        ws['C1'].border = border
+
+        # ==========================================================
+        # SUBTÍTULO
+        # ==========================================================
+
+        ws.merge_cells(
+            'C3:H3'
+        )
+
+        ws['C3'] = (
+            'MATRIZ DE INDICADORES HSEQ'
+        )
+
+        ws['C3'].fill = azul_claro
+        ws['C3'].font = subtitulo_font
+        ws['C3'].alignment = center
+        ws['C3'].border = border
+
+        # ==========================================================
+        # INFORMACIÓN DOCUMENTO
+        # ==========================================================
+
+        info_header = [
+
+            (
+                'I1:J1',
+                'VERSIÓN: 002'
+            ),
+
+            (
+                'I2:J2',
+                'CÓDIGO: HSEQ-R-159'
+            ),
+
+            (
+                'I3:J3',
+                'PÁGINA: 15 DE 16'
+            )
+
+        ]
+
+        for rango, texto in info_header:
+
+            ws.merge_cells(
+                rango
+            )
+
+            celda = rango.split(':')[0]
+
+            ws[celda] = texto
+
+            ws[celda].fill = azul_oscuro
+            ws[celda].font = blanco_negrita
+            ws[celda].alignment = center
+            ws[celda].border = border
+
+        # ==========================================================
+        # INFORMACIÓN DEL PERÍODO
+        # ==========================================================
+
+        ws.merge_cells(
+            'A5:J5'
+        )
+
+        ws['A5'] = (
+            'INFORMACIÓN DEL PERÍODO'
+        )
+
+        ws['A5'].fill = azul_oscuro
+        ws['A5'].font = blanco_negrita
+        ws['A5'].alignment = center
+
+        for col in range(1, 11):
+
+            ws.cell(
+                5,
+                col
+            ).border = border
+
+        # ==========================================================
+        # PERÍODO
+        # ==========================================================
+
+        ws.merge_cells(
+            'A6:B6'
+        )
+
+        ws['A6'] = (
+            'PERÍODO ANALIZADO'
+        )
+
+        ws['A6'].fill = gris
+        ws['A6'].font = negrita
+        ws['A6'].alignment = left
+
+        ws.merge_cells(
+            'C6:F6'
+        )
+
+        ws['C6'] = (
+            f'{fecha_inicio_obj.strftime("%d/%m/%Y")} - '
+            f'{fecha_fin_obj.strftime("%d/%m/%Y")}'
+        )
+
+        ws['C6'].alignment = left
+
+        ws.merge_cells(
+            'G6:H6'
+        )
+
+        ws['G6'] = 'ACTIVO'
+
+        ws['G6'].fill = gris
+        ws['G6'].font = negrita
+        ws['G6'].alignment = left
+
+        ws.merge_cells(
+            'I6:J6'
+        )
+
+        ws['I6'] = activo
+        ws['I6'].alignment = left
+
+        # ==========================================================
+        # TIPO DE REPORTE
+        # ==========================================================
+
+        ws.merge_cells(
+            'A7:B7'
+        )
+
+        ws['A7'] = (
+            'TIPO DE REPORTE'
+        )
+
+        ws['A7'].fill = gris
+        ws['A7'].font = negrita
+        ws['A7'].alignment = left
+
+        ws.merge_cells(
+            'C7:F7'
+        )
+
+        nombres_tipo = {
+
+            'diario': 'DIARIO',
+
+            'semanal': 'SEMANAL',
+
+            'mensual': 'MENSUAL',
+
+            'rango': 'RANGO'
+
+        }
+
+        ws['C7'] = nombres_tipo.get(
+            tipo,
+            tipo.upper()
+        )
+
+        ws['C7'].alignment = left
+
+        ws.merge_cells(
+            'G7:H7'
+        )
+
+        ws['G7'] = (
+            'FECHA DE GENERACIÓN'
+        )
+
+        ws['G7'].fill = gris
+        ws['G7'].font = negrita
+        ws['G7'].alignment = left
+
+        ws.merge_cells(
+            'I7:J7'
+        )
+
+        ws['I7'] = hoy.strftime(
+            '%d/%m/%Y'
+        )
+
+        ws['I7'].alignment = left
+
+        # ==========================================================
+        # BORDES INFORMACIÓN
+        # ==========================================================
+
+        for fila in [6, 7]:
+
+            for col in range(1, 11):
+
+                ws.cell(
+                    fila,
+                    col
+                ).border = border
+
+        # ==========================================================
+        # FUNCIÓN PARA BORDES COMPLETOS
+        # ==========================================================
+
+        def aplicar_bordes(
+            fila_inicio,
+            fila_fin,
+            col_inicio,
+            col_fin
+        ):
+
+            for fila_borde in range(
+                fila_inicio,
+                fila_fin + 1
+            ):
+
+                for col_borde in range(
+                    col_inicio,
+                    col_fin + 1
+                ):
+
+                    ws.cell(
+                        fila_borde,
+                        col_borde
+                    ).border = border
+
+        # ==========================================================
+        # FUNCIÓN PARA COMBINAR CON BORDES
+        # ==========================================================
+
+        def combinar_con_borde(
+            fila,
+            col_inicio,
+            col_fin
+        ):
+
+            # Aplicar primero
+            aplicar_bordes(
+                fila,
+                fila,
+                col_inicio,
+                col_fin
+            )
+
+            # Combinar
+            ws.merge_cells(
+                start_row=fila,
+                start_column=col_inicio,
+                end_row=fila,
+                end_column=col_fin
+            )
+
+            # Volver a aplicar
+            aplicar_bordes(
+                fila,
+                fila,
+                col_inicio,
+                col_fin
+            )
+
+        # ==========================================================
+        # FUNCIÓN INDICADOR
+        # ==========================================================
+
+        def escribir_indicador(
+
+            fila,
+
+            titulo,
+
+            definicion,
+
+            interpretacion,
+
+            tipo_indicador,
+
+            fuente,
+
+            proceso,
+
+            sentido,
+
+            meta,
+
+            metodo,
+
+            frecuencia,
+
+            programados,
+
+            ejecutados,
+
+            porcentaje,
+
+            estado
+
+        ):
+
+            # ======================================================
+            # TÍTULO
+            # ======================================================
+
+            combinar_con_borde(
+                fila,
+                1,
+                10
+            )
+
+            celda_titulo = ws.cell(
+                fila,
+                1
+            )
+
+            celda_titulo.value = titulo
+
+            celda_titulo.fill = azul_oscuro
+
+            celda_titulo.font = blanco_negrita
+
+            celda_titulo.alignment = center
+
+            ws.row_dimensions[
+                fila
+            ].height = 32
+
+            # ======================================================
+            # CAMPOS
+            # ======================================================
+
+            campos = [
+
+                (
+                    'DEFINICIÓN DEL INDICADOR',
+                    definicion,
+                    60
+                ),
+
+                (
+                    'INTERPRETACIÓN DEL INDICADOR',
+                    interpretacion,
+                    70
+                ),
+
+                (
+                    'TIPO DE INDICADOR',
+                    tipo_indicador,
+                    32
+                ),
+
+                (
+                    'FUENTE DE LA INFORMACIÓN',
+                    fuente,
+                    65
+                ),
+
+                (
+                    'PROCESO RESPONSABLE',
+                    proceso,
+                    32
+                ),
+
+                (
+                    'SENTIDO',
+                    sentido,
+                    32
+                ),
+
+                (
+                    'PERSONAS QUE DEBEN CONOCER EL RESULTADO',
+                    'Gerencia, HSEQ, Operaciones y Mantenimiento',
+                    38
+                ),
+
+                (
+                    'META',
+                    meta,
+                    32
+                ),
+
+                (
+                    'MÉTODO DE CÁLCULO',
+                    metodo,
+                    60
+                ),
+
+                (
+                    'FRECUENCIA',
+                    frecuencia,
+                    38
+                )
+            ]
+
+            fila_actual = fila + 1
+
+            for nombre, valor, altura in campos:
+
+                # ==================================================
+                # A:B - ETIQUETA
+                # ==================================================
+
+                combinar_con_borde(
+                    fila_actual,
+                    1,
+                    2
+                )
+
+                etiqueta = ws.cell(
+                    fila_actual,
+                    1
+                )
+
+                etiqueta.value = nombre
+
+                etiqueta.fill = gris
+
+                etiqueta.font = negrita
+
+                etiqueta.alignment = left
+
+                # ==================================================
+                # C:J - CONTENIDO
+                # ==================================================
+
+                combinar_con_borde(
+                    fila_actual,
+                    3,
+                    10
+                )
+
+                valor_cell = ws.cell(
+                    fila_actual,
+                    3
+                )
+
+                valor_cell.value = valor
+
+                valor_cell.font = normal
+
+                valor_cell.alignment = left
+
+                # ==================================================
+                # ASEGURAR TODOS LOS BORDES
+                # ==================================================
+
+                aplicar_bordes(
+                    fila_actual,
+                    fila_actual,
+                    1,
+                    10
+                )
+
+                ws.row_dimensions[
+                    fila_actual
+                ].height = altura
+
+                fila_actual += 1
+
+            # ======================================================
+            # RESULTADO DEL PERÍODO
+            # ======================================================
+
+            combinar_con_borde(
+                fila_actual,
+                1,
+                10
+            )
+
+            resultado = ws.cell(
+                fila_actual,
+                1
+            )
+
+            resultado.value = (
+                'RESULTADO DEL PERÍODO'
+            )
+
+            resultado.fill = azul_header
+
+            resultado.font = negrita
+
+            resultado.alignment = center
+
+            fila_actual += 1
+
+            # ======================================================
+            # ENCABEZADOS RESULTADO
+            # ======================================================
+
+            encabezados = [
+
+                'PROGRAMADOS / REPORTADOS',
+
+                'EJECUTADOS / CERRADOS',
+
+                'CUMPLIMIENTO',
+
+                'META',
+
+                'ESTADO'
+
+            ]
+
+            rangos = [
+
+                (1, 2),
+
+                (3, 4),
+
+                (5, 6),
+
+                (7, 8),
+
+                (9, 10)
+
+            ]
+
+            valores = [
+
+                programados,
+
+                ejecutados,
+
+                porcentaje / 100,
+
+                0.90,
+
+                estado
+
+            ]
+
+            # ======================================================
+            # ENCABEZADOS
+            # ======================================================
+
+            for i in range(5):
+
+                col_inicio = rangos[i][0]
+
+                col_fin = rangos[i][1]
+
+                combinar_con_borde(
+
+                    fila_actual,
+
+                    col_inicio,
+
+                    col_fin
+                )
+
+                cell = ws.cell(
+                    fila_actual,
+                    col_inicio
+                )
+
+                cell.value = encabezados[i]
+
+                cell.fill = azul_oscuro
+
+                cell.font = blanco_negrita
+
+                cell.alignment = center
+
+                aplicar_bordes(
+
+                    fila_actual,
+
+                    fila_actual,
+
+                    col_inicio,
+
+                    col_fin
+                )
+
+            fila_actual += 1
+
+            # ======================================================
+            # VALORES
+            # ======================================================
+
+            for i in range(5):
+
+                col_inicio = rangos[i][0]
+
+                col_fin = rangos[i][1]
+
+                combinar_con_borde(
+
+                    fila_actual,
+
+                    col_inicio,
+
+                    col_fin
+                )
+
+                cell = ws.cell(
+                    fila_actual,
+                    col_inicio
+                )
+
+                cell.value = valores[i]
+
+                cell.alignment = center
+
+                cell.font = Font(
+                    bold=True,
+                    size=12
+                )
+
+                # ==================================================
+                # PORCENTAJES
+                # ==================================================
+
+                if i in [2, 3]:
+
+                    cell.number_format = (
+                        '0.00%'
+                    )
+
+                # ==================================================
+                # ESTADO
+                # ==================================================
+
+                if i == 4:
+
+                    if estado == 'CUMPLE':
+
+                        cell.fill = verde
+
+                    else:
+
+                        cell.fill = rojo
+
+                    cell.font = Font(
+                        bold=True,
+                        size=11
+                    )
+
+                aplicar_bordes(
+
+                    fila_actual,
+
+                    fila_actual,
+
+                    col_inicio,
+
+                    col_fin
+                )
+
+            ws.row_dimensions[
+                fila_actual
+            ].height = 34
+
+            return fila_actual + 2
+
+        # ==========================================================
+        # FRECUENCIA
+        # ==========================================================
+
+        frecuencia_reporte = (
+
+            f'Fecha desde: '
+            f'{fecha_inicio_obj.strftime("%d/%m/%Y")} '
+            f'| Fecha hasta: '
+            f'{fecha_fin_obj.strftime("%d/%m/%Y")}'
+        )
+
+        # ==========================================================
+        # INDICADOR PREVENTIVO
+        # ==========================================================
+
+        siguiente_fila = escribir_indicador(
+
+            9,
+
+            'INDICADOR DE CUMPLIMIENTO DEL MANTENIMIENTO PREVENTIVO',
+
+            'Mide el cumplimiento de las actividades de mantenimiento '
+            'preventivo e inspección reportadas durante el período evaluado.',
+
+            'Permite determinar el porcentaje de actividades preventivas '
+            'e inspecciones ejecutadas frente a las actividades reportadas. '
+            'Para este indicador HSEQ, las inspecciones hacen parte del '
+            'cumplimiento preventivo.',
+
+            'Gestión y cumplimiento.',
+
+            'Alertas de mantenimiento, plan de mantenimiento, órdenes '
+            'de trabajo, registros de mantenimiento y hojas de vida '
+            'de vehículos y maquinaria.',
+
+            'Gestión de Operaciones y Mantenimiento',
+
+            'Ascendente.',
+
+            '≥ 90 %.',
+
+            '(Mantenimientos preventivos e inspecciones ejecutados / '
+            'Mantenimientos preventivos e inspecciones reportados) × 100',
+
+            frecuencia_reporte,
+
+            preventivos_programados,
+
+            preventivos_ejecutados,
+
+            porcentaje_preventivo,
+
+            'CUMPLE'
+            if cumple_preventivo
+            else 'NO CUMPLE'
+        )
+
+        # ==========================================================
+        # INDICADOR CORRECTIVO
+        # ==========================================================
+
+        siguiente_fila = escribir_indicador(
+
+            siguiente_fila,
+
+            'INDICADOR DE CUMPLIMIENTO DEL MANTENIMIENTO CORRECTIVO',
+
+            'Mide el cumplimiento de las actividades de mantenimiento '
+            'correctivo reportadas durante el período evaluado.',
+
+            'Permite evaluar la capacidad de la organización para atender '
+            'y cerrar las fallas identificadas en vehículos y maquinaria.',
+
+            'Gestión y eficacia.',
+
+            'Reportes de fallas, órdenes de trabajo, registros de '
+            'mantenimiento correctivo y hojas de vida.',
+
+            'Gestión de Operaciones y Mantenimiento',
+
+            'Ascendente.',
+
+            '≥ 90 %.',
+
+            '(Mantenimientos correctivos cerrados / '
+            'Mantenimientos correctivos reportados) × 100',
+
+            frecuencia_reporte,
+
+            correctivos_reportados,
+
+            correctivos_cerrados,
+
+            porcentaje_correctivo,
+
+            'CUMPLE'
+            if cumple_correctivo
+            else 'NO CUMPLE'
+        )
+
+        # ==========================================================
+        # INDICADOR INSPECCIONES
+        # ==========================================================
+
+        siguiente_fila = escribir_indicador(
+
+            siguiente_fila,
+
+            'INDICADOR DE CUMPLIMIENTO DE INSPECCIONES',
+
+            'Mide el cumplimiento de las inspecciones reportadas '
+            'durante el período evaluado.',
+
+            'Permite identificar el porcentaje de inspecciones ejecutadas '
+            'frente a las inspecciones reportadas.',
+
+            'Gestión y cumplimiento.',
+
+            'Alertas de inspección y registros de inspecciones '
+            'de vehículos y maquinaria.',
+
+            'Gestión de Operaciones y Mantenimiento',
+
+            'Ascendente.',
+
+            'Indicador informativo.',
+
+            '(Inspecciones ejecutadas / '
+            'Inspecciones reportadas) × 100',
+
+            frecuencia_reporte,
+
+            inspecciones_reportadas,
+
+            inspecciones_ejecutadas,
+
+            porcentaje_inspecciones,
+
+            'CUMPLE'
+            if cumple_inspecciones
+            else 'NO CUMPLE'
+        )
+
+        # ==========================================================
+        # PIE DE DOCUMENTO
+        # ==========================================================
+
+        fila_pie = siguiente_fila + 1
+
+        combinar_con_borde(
+            fila_pie,
+            1,
+            10
+        )
+
+        ws.cell(
+            fila_pie,
+            1
+        ).value = (
+            'Documento generado automáticamente por Transmena Smart'
+            'para Transmena y Carga.'
+        )
+
+        ws.cell(
+            fila_pie,
+            1
+        ).font = Font(
+            italic=True,
+            size=9,
+            color='666666'
+        )
+
+        ws.cell(
+            fila_pie,
+            1
+        ).alignment = center
+
+        # ==========================================================
+        # CONFIGURACIÓN DE IMPRESIÓN
+        # ==========================================================
+
+        ws.freeze_panes = 'A9'
+
+        ws.print_area = (
+            f'A1:J{fila_pie}'
+        )
+
+        ws.page_setup.orientation = (
+            'portrait'
+        )
+
+        ws.page_setup.paperSize = (
+            ws.PAPERSIZE_A4
+        )
+
+        ws.page_setup.fitToWidth = 1
+
+        ws.page_setup.fitToHeight = 0
+
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+        ws.page_margins = PageMargins(
+
+            left=0.25,
+
+            right=0.25,
+
+            top=0.35,
+
+            bottom=0.35,
+
+            header=0.15,
+
+            footer=0.15
+        )
+
+        # ==========================================================
+        # GENERAR ARCHIVO
+        # ==========================================================
+
+        output = BytesIO()
+
+        wb.save(
+            output
+        )
+
+        output.seek(0)
+
+        nombre_archivo = (
+            'HSEQ-R-159-Indicadores-Mantenimiento.xlsx'
+        )
+
+        return send_file(
+
+            output,
+
+            as_attachment=True,
+
+            download_name=nombre_archivo,
+
+            mimetype=(
+                'application/vnd.openxmlformats-officedocument.'
+                'spreadsheetml.sheet'
+            )
+        )
+
+    except Exception as e:
+
+        import traceback
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            'error':
+                'Error generando el indicador HSEQ',
+
+            'detalle':
+                str(e)
+
+        }), 500

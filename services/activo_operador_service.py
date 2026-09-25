@@ -28,8 +28,10 @@ class ActivoOperadorService:
 
         asignaciones = (
             ActivoOperador.query
+            .filter(
+                ActivoOperador.activo == True
+            )
             .order_by(
-                ActivoOperador.activo.desc(),
                 ActivoOperador.fecha_asignacion.desc()
             )
             .all()
@@ -93,7 +95,13 @@ class ActivoOperadorService:
             .join(Rol)
             .filter(
                 Usuario.activo == True,
-                Rol.nombre == "operador"
+                Rol.nombre == "operador",
+                ~Usuario.id.in_(
+                    db.session.query(ActivoOperador.usuario_id)
+                    .filter(
+                        ActivoOperador.activo == True
+                    )
+                )
             )
             .order_by(Usuario.nombre)
             .all()
@@ -120,7 +128,16 @@ class ActivoOperadorService:
 
         datos = (
             Vehiculo.query
-            .filter_by(activo=True)
+            .filter(
+                Vehiculo.activo == True,
+                ~Vehiculo.id.in_(
+                    db.session.query(ActivoOperador.vehiculo_id)
+                    .filter(
+                        ActivoOperador.activo == True,
+                        ActivoOperador.vehiculo_id.isnot(None)
+                    )
+                )
+            )
             .order_by(Vehiculo.placa)
             .all()
         )
@@ -149,7 +166,16 @@ class ActivoOperadorService:
 
         datos = (
             Maquinaria.query
-            .filter_by(activo=True)
+            .filter(
+                Maquinaria.activo == True,
+                ~Maquinaria.id.in_(
+                    db.session.query(ActivoOperador.maquinaria_id)
+                    .filter(
+                        ActivoOperador.activo == True,
+                        ActivoOperador.maquinaria_id.isnot(None)
+                    )
+                )
+            )
             .order_by(Maquinaria.codigo)
             .all()
         )

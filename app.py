@@ -30,7 +30,7 @@ from scheduler import iniciar_scheduler
 from routes.inspecciones import inspecciones_bp
 from routes.activo_operador import activo_operador_bp
 from routes.usuarios import usuarios_bp
-
+from routes.usuario_documento_routes import (usuario_documento_bp)
 
 # 🔥 sockets
 from sockets.socket_handler import socketio, iniciar_worker
@@ -89,6 +89,7 @@ def create_app():
     app.register_blueprint(inspecciones_bp, url_prefix="/api/inspecciones")
     app.register_blueprint(activo_operador_bp, url_prefix="/api/activo-operador")
     app.register_blueprint(usuarios_bp, url_prefix="/api/usuarios")
+    app.register_blueprint(usuario_documento_bp, url_prefix="/api/usuarios-documentos")
     # ==============================
     # SERVIR IMÁGENES
     # ==============================

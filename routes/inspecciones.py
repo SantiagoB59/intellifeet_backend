@@ -44,6 +44,7 @@ inspecciones_bp = Blueprint(
 )
 
 import traceback
+
 @inspecciones_bp.route("/mi-plantilla", methods=["GET"])
 @jwt_required()
 def mi_plantilla():
@@ -53,31 +54,110 @@ def mi_plantilla():
         usuario = get_jwt_identity()
         usuario_id = usuario["id"]
 
-        activo = InspeccionService.obtener_activo_operador(usuario_id)
+        # =====================================================
+        # ACTIVO ASIGNADO AL OPERADOR
+        # =====================================================
+
+        activo = InspeccionService.obtener_activo_operador(
+            usuario_id
+        )
+
+        # =====================================================
+        # PLANTILLA CORRESPONDIENTE AL ACTIVO
+        # =====================================================
 
         plantilla = InspeccionService.obtener_plantilla(
             activo["tipo"],
             activo["tipo_id"]
         )
 
-        # ---------------------------------------
-        # ¿YA HIZO LA INSPECCIÓN HOY?
-        # ---------------------------------------
+        # =====================================================
+        # INSPECCIÓN DEL DÍA
+        # =====================================================
 
         inspeccion_hoy = InspeccionService.obtener_inspeccion_hoy(
             usuario_id,
-            vehiculo_id=activo["id"] if activo["tipo"] == "VEHICULO" else None,
-            maquinaria_id=activo["id"] if activo["tipo"] == "MAQUINARIA" else None
+            vehiculo_id=(
+                activo["id"]
+                if activo["tipo"] == "VEHICULO"
+                else None
+            ),
+            maquinaria_id=(
+                activo["id"]
+                if activo["tipo"] == "MAQUINARIA"
+                else None
+            )
         )
+
+        # =====================================================
+        # LECTURA ACTUAL DEL ACTIVO
+        # =====================================================
+
+        lectura_actual = None
+
+        if activo["tipo"] == "VEHICULO":
+
+            lectura_actual = activo["activo"].km_actual
+
+        elif activo["tipo"] == "MAQUINARIA":
+
+            lectura_actual = activo["activo"].horometro_actual
+
+        # =====================================================
+        # LECTURA INICIAL SUGERIDA
+        #
+        # Si ya existe una lectura inicial en la inspección,
+        # se conserva esa.
+        #
+        # Si todavía no existe, se propone la lectura actual
+        # del vehículo o maquinaria.
+        # =====================================================
+
+        lectura_inicial_sugerida = lectura_actual
+
+        if (
+            inspeccion_hoy
+            and inspeccion_hoy.contador_inicial is not None
+        ):
+            lectura_inicial_sugerida = (
+                inspeccion_hoy.contador_inicial
+            )
+
+        # =====================================================
+        # ESTADO DE LECTURA FINAL
+        # =====================================================
+
         lectura_final_registrada = (
             inspeccion_hoy is not None
             and inspeccion_hoy.contador_final is not None
         )
 
+        # =====================================================
+        # RESPUESTA
+        # =====================================================
+
         return jsonify({
 
             "success": True,
-            "lectura_final_registrada": lectura_final_registrada,
+
+            # -------------------------------------------------
+            # LECTURAS
+            # -------------------------------------------------
+
+            "lectura_actual": lectura_actual,
+
+            "lectura_inicial_sugerida": (
+                lectura_inicial_sugerida
+            ),
+
+            "lectura_final_registrada": (
+                lectura_final_registrada
+            ),
+
+            # -------------------------------------------------
+            # ESTADOS DE LA INSPECCIÓN
+            # -------------------------------------------------
+
             "ya_realizada": (
                 inspeccion_hoy is not None
                 and inspeccion_hoy.estado == "FINALIZADA"
@@ -93,10 +173,27 @@ def mi_plantilla():
                 and inspeccion_hoy.estado == "EN_PROCESO"
             ),
 
+            "puede_reanudar": (
+                inspeccion_hoy is not None
+                and inspeccion_hoy.estado in [
+                    "EN_PROCESO",
+                    "PENDIENTE_CIERRE"
+                ]
+            ),
+
+            # -------------------------------------------------
+            # INSPECCIÓN
+            # -------------------------------------------------
+
             "inspeccion_hoy": (
                 inspeccion_hoy.to_dict()
-                if inspeccion_hoy else None
+                if inspeccion_hoy
+                else None
             ),
+
+            # -------------------------------------------------
+            # ACTIVO ASIGNADO
+            # -------------------------------------------------
 
             "activo": {
 
@@ -105,15 +202,29 @@ def mi_plantilla():
                 "nombre": activo["nombre"],
                 "tipo_id": activo["tipo_id"],
 
+                # ---------------------------------------------
+                # VEHÍCULO
+                # ---------------------------------------------
+
                 "vehiculo": {
 
                     "id": activo["activo"].id,
                     "placa": activo["activo"].placa,
                     "marca": activo["activo"].marca,
                     "modelo": activo["activo"].modelo,
-                    "tipo": activo["activo"].tipo_vehiculo.nombre
+                    "tipo": (
+                        activo["activo"]
+                        .tipo_vehiculo
+                        .nombre
+                    )
 
-                } if activo["tipo"] == "VEHICULO" else None,
+                }
+                if activo["tipo"] == "VEHICULO"
+                else None,
+
+                # ---------------------------------------------
+                # MAQUINARIA
+                # ---------------------------------------------
 
                 "maquinaria": {
 
@@ -122,9 +233,14 @@ def mi_plantilla():
                     "marca": activo["activo"].marca,
                     "modelo": activo["activo"].modelo
 
-                } if activo["tipo"] == "MAQUINARIA" else None
-
+                }
+                if activo["tipo"] == "MAQUINARIA"
+                else None
             },
+
+            # -------------------------------------------------
+            # PLANTILLA
+            # -------------------------------------------------
 
             "plantilla": plantilla.to_dict()
 
@@ -138,8 +254,6 @@ def mi_plantilla():
             "success": False,
             "message": str(e)
         }), 400
-        
-        
             
 @inspecciones_bp.route("/iniciar", methods=["POST"])
 @jwt_required()
@@ -866,28 +980,81 @@ def guardar_lectura_final(inspeccion_id):
 
     try:
 
+        # ==================================================
+        # DATOS DEL FORMULARIO
+        # ==================================================
+
         lectura = request.form.get("lectura")
 
+        tratamiento_datos_aceptado = (
+            request.form.get("tratamiento_datos_aceptado", "false").lower()
+            == "true"
+        )
+
+        confirma_firma = (
+            request.form.get("confirma_firma", "false").lower()
+            == "true"
+        )
+
+        # ==================================================
+        # ARCHIVOS
+        # ==================================================
+
         archivo = request.files.get("foto")
+        firma = request.files.get("firma")
+
+        # ==================================================
+        # VALIDAR LECTURA
+        # ==================================================
 
         if not lectura:
+
             return jsonify({
                 "success": False,
                 "message": "Debe ingresar la lectura final."
             }), 400
 
+        # ==================================================
+        # VALIDAR FOTO
+        # ==================================================
+
         if not archivo:
+
             return jsonify({
                 "success": False,
-                "message": "Debe adjuntar la fotografía de la lectura final."
+                "message": (
+                    "Debe adjuntar la fotografía "
+                    "de la lectura final."
+                )
             }), 400
+
+        # ==================================================
+        # VALIDAR FIRMA
+        # ==================================================
+
+        if not firma:
+
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Debe adjuntar la firma "
+                    "del operador."
+                )
+            }), 400
+
+        # ==================================================
+        # VALIDAR EXTENSIÓN DE FOTO
+        # ==================================================
 
         extension = ""
 
         if archivo.filename and "." in archivo.filename:
-            extension = archivo.filename.rsplit(
-                ".", 1
-            )[1].lower()
+
+            extension = (
+                archivo.filename
+                .rsplit(".", 1)[1]
+                .lower()
+            )
 
         extensiones_permitidas = {
             "jpg",
@@ -903,6 +1070,38 @@ def guardar_lectura_final(inspeccion_id):
                 "message": "Formato de imagen no permitido."
             }), 400
 
+        # ==================================================
+        # VALIDAR EXTENSIÓN DE FIRMA
+        # ==================================================
+
+        extension_firma = ""
+
+        if firma.filename and "." in firma.filename:
+
+            extension_firma = (
+                firma.filename
+                .rsplit(".", 1)[1]
+                .lower()
+            )
+
+        if extension_firma not in {
+            "jpg",
+            "jpeg",
+            "png",
+            "webp"
+        }:
+
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Formato de firma no permitido."
+                )
+            }), 400
+
+        # ==================================================
+        # CARPETA DE LA INSPECCIÓN
+        # ==================================================
+
         carpeta = os.path.join(
             "uploads",
             "inspecciones",
@@ -913,6 +1112,10 @@ def guardar_lectura_final(inspeccion_id):
             carpeta,
             exist_ok=True
         )
+
+        # ==================================================
+        # GUARDAR FOTO DE LECTURA FINAL
+        # ==================================================
 
         nombre = (
             f"lectura_final_"
@@ -929,28 +1132,44 @@ def guardar_lectura_final(inspeccion_id):
 
         ruta_bd = ruta.replace("\\", "/")
 
+        # ==================================================
+        # DATA
+        # ==================================================
+
         data = {
-
             "lectura": lectura,
-
             "foto": ruta_bd
-
         }
+
+        # ==================================================
+        # GUARDAR INSPECCIÓN
+        # ==================================================
 
         inspeccion = (
             InspeccionService
             .guardar_lectura_final(
                 inspeccion_id,
-                data
+                data,
+                firma=firma,
+                tratamiento_datos_aceptado=(
+                    tratamiento_datos_aceptado
+                ),
+                confirma_firma=(
+                    confirma_firma
+                )
             )
         )
+
+        # ==================================================
+        # RESPUESTA
+        # ==================================================
 
         return jsonify({
 
             "success": True,
 
             "message": (
-                "Lectura final registrada correctamente."
+                "Inspección finalizada correctamente."
             ),
 
             "data": inspeccion.to_dict()
@@ -962,11 +1181,10 @@ def guardar_lectura_final(inspeccion_id):
         return jsonify({
 
             "success": False,
+
             "message": str(e)
 
-        }), 400
-        
-        
+        }), 400    
         
 # ==========================================================
 # REPORTE SEMANAL PREOPERACIONAL

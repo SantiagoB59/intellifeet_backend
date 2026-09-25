@@ -7,9 +7,9 @@ from models import (
     VehiculoUbicacionActual,
     MaquinariaMantenimiento,
     Maquinaria,
-    
     MaquinariaPlanItem,
-    MaquinariaDocumento
+    MaquinariaDocumento,
+    UsuarioDocumento
 )
 
 from datetime import datetime, date
@@ -21,6 +21,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 datetime.now(ZoneInfo("America/Bogota"))
+
+
 # =========================================================
 # CREAR ALERTA
 # =========================================================
@@ -37,6 +39,7 @@ def crear_alerta(
 
     vehiculo_id=None,
     maquinaria_id=None,
+    usuario_id=None,
 
     viaje_id=None,
 
@@ -62,6 +65,7 @@ def crear_alerta(
 
             vehiculo_id=vehiculo_id,
             maquinaria_id=maquinaria_id,
+            usuario_id=usuario_id,
             viaje_id=viaje_id,
 
             mantenimiento_id=mantenimiento_id,
@@ -88,7 +92,6 @@ def crear_alerta(
             ),
 
             metadata_json=metadata
-
         )
 
         db.session.add(alerta)
@@ -155,6 +158,16 @@ def crear_alerta(
 
         query = query.filter_by(
             maquinaria_plan_item_id=maquinaria_plan_item_id
+        )
+
+    # =====================================================
+    # USUARIO / OPERADOR
+    # =====================================================
+
+    if usuario_id:
+
+        query = query.filter_by(
+            usuario_id=usuario_id
         )
 
     # =====================================================
@@ -297,6 +310,7 @@ def crear_alerta(
 
         vehiculo_id=vehiculo_id,
         maquinaria_id=maquinaria_id,
+        usuario_id=usuario_id,
         viaje_id=viaje_id,
 
         mantenimiento_id=mantenimiento_id,
@@ -330,7 +344,6 @@ def crear_alerta(
         ),
 
         metadata_json=metadata
-
     )
 
     db.session.add(alerta)
@@ -356,7 +369,6 @@ def crear_alerta(
         )
 
     return alerta
-
 
 def resolver_alerta(alerta_id):
 
@@ -426,6 +438,42 @@ def resolver_alertas_documento(
 
         alerta.estado = 'RESUELTA'
         alerta.fecha_resolucion = datetime.now(ZoneInfo("America/Bogota"))
+
+    db.session.commit()
+
+    return True
+
+
+# =========================================================
+# RESOLVER ALERTAS DOCUMENTO USUARIO
+# =========================================================
+
+def resolver_alertas_documento_usuario(
+    usuario_id,
+    categoria
+):
+
+    alertas = Alerta.query.filter_by(
+        tipo='DOCUMENTO',
+        categoria=categoria,
+        usuario_id=usuario_id,
+        estado='ACTIVA'
+    ).all()
+
+    for alerta in alertas:
+
+        alerta.estado = 'RESUELTA'
+
+        alerta.fecha_resolucion = (
+            datetime.now(
+                ZoneInfo("America/Bogota")
+            )
+        )
+
+        socketio.emit(
+            'alerta_resuelta',
+            alerta.to_dict()
+        )
 
     db.session.commit()
 
@@ -754,6 +802,8 @@ def ejecutar_motor_alertas():
     generar_alertas_documentos_maquinaria()
 
     generar_alertas_velocidad()
+    
+    generar_alertas_documentos_usuarios()
 
     # generar_alertas_apagado()
 
@@ -1154,6 +1204,143 @@ def generar_alertas_documentos_maquinaria():
             categoria=doc.documento_tipo.nombre,
 
             maquinaria_id=doc.maquinaria_id,
+
+            titulo=f"Documento {estado}",
+
+            mensaje=mensaje,
+
+            prioridad=prioridad,
+
+            metadata=metadata
+        )
+        
+        
+# =========================================================
+# ALERTAS DOCUMENTOS USUARIOS
+# =========================================================
+
+def generar_alertas_documentos_usuarios():
+
+    documentos = UsuarioDocumento.query.filter_by(
+        activo=True
+    ).all()
+
+    hoy = date.today()
+
+    for doc in documentos:
+
+        # -----------------------------------------
+        # SIN FECHA DE VENCIMIENTO
+        # -----------------------------------------
+
+        if not doc.fecha_vencimiento:
+            continue
+
+        # -----------------------------------------
+        # VALIDAR TIPO DOCUMENTO
+        # -----------------------------------------
+
+        if not doc.documento_tipo:
+            continue
+
+        dias = (
+            doc.fecha_vencimiento - hoy
+        ).days
+
+        categoria = doc.documento_tipo.nombre
+
+        # -----------------------------------------
+        # DOCUMENTO OK
+        # -----------------------------------------
+
+        if dias > 15:
+
+            resolver_alertas_documento_usuario(
+                usuario_id=doc.usuario_id,
+                categoria=categoria
+            )
+
+            continue
+
+        # -----------------------------------------
+        # PRIORIDAD
+        # -----------------------------------------
+
+        prioridad = (
+            'CRITICA'
+            if dias <= 0
+            else 'MEDIA'
+        )
+
+        # -----------------------------------------
+        # ESTADO
+        # -----------------------------------------
+
+        estado = (
+            'VENCIDO'
+            if dias <= 0
+            else 'POR_VENCER'
+        )
+
+        # -----------------------------------------
+        # METADATA
+        # -----------------------------------------
+
+        metadata = {
+
+            'documento': categoria,
+
+            'fecha_vencimiento': (
+                doc.fecha_vencimiento.isoformat()
+            ),
+
+            'dias_restantes': dias,
+
+            'estado': estado,
+
+            'usuario_id': doc.usuario_id
+        }
+
+        # -----------------------------------------
+        # MENSAJE
+        # -----------------------------------------
+
+        if dias > 1:
+
+            mensaje = (
+                f"{categoria} vence en {dias} días"
+            )
+
+        elif dias == 1:
+
+            mensaje = (
+                f"{categoria} vence mañana"
+            )
+
+        elif dias == 0:
+
+            mensaje = (
+                f"{categoria} vence hoy"
+            )
+
+        else:
+
+            mensaje = (
+                f"{categoria} venció hace "
+                f"{abs(dias)} días"
+            )
+
+        # -----------------------------------------
+        # CREAR / ACTUALIZAR ALERTA
+        # -----------------------------------------
+
+        crear_alerta(
+
+            tipo='DOCUMENTO',
+
+            categoria=categoria,
+
+            usuario_id=doc.usuario_id,
 
             titulo=f"Documento {estado}",
 

@@ -3,7 +3,9 @@ from flask import Blueprint, request, jsonify
 from models import (
     db,
     PlanItem,
-    PlanItemActividad
+    PlanItemActividad,
+    TipoVehiculo,
+    TipoMaquinaria
 )
 
 
@@ -17,22 +19,126 @@ plan_items_bp = Blueprint(
 # LISTAR
 # =========================================================
 
-@plan_items_bp.route(
-    '/plan-items',
-    methods=['GET']
-)
+@plan_items_bp.route('/plan-items', methods=['GET'])
 def listar_plan_items():
 
-    items = PlanItem.query.order_by(
-        PlanItem.id.desc()
-    ).all()
+    try:
 
-    return jsonify([
-        i.to_dict()
-        for i in items
-    ])
+        # =====================================================
+        # PARÁMETROS
+        # =====================================================
 
+        tipo_activo = request.args.get('tipo_activo')
 
+        tipo_vehiculo_id = request.args.get(
+            'tipo_vehiculo_id',
+            type=int
+        )
+
+        tipo_maquinaria_id = request.args.get(
+            'tipo_maquinaria_id',
+            type=int
+        )
+
+        print("========================================")
+        print("LISTANDO PLAN ITEMS")
+        print("tipo_activo:", tipo_activo)
+        print("tipo_vehiculo_id:", tipo_vehiculo_id)
+        print("tipo_maquinaria_id:", tipo_maquinaria_id)
+        print("========================================")
+
+        # =====================================================
+        # CONSULTA BASE
+        # =====================================================
+
+        query = PlanItem.query.filter(
+            PlanItem.activo == True
+        )
+
+        # =====================================================
+        # VEHÍCULO
+        # =====================================================
+
+        if tipo_activo == 'VEHICULO':
+
+            query = query.filter(
+                PlanItem.tipo_activo == 'VEHICULO'
+            )
+
+            # Si recibimos tipo específico
+            if tipo_vehiculo_id is not None:
+
+                query = query.filter(
+                    db.or_(
+                        PlanItem.tipo_vehiculo_id == tipo_vehiculo_id,
+                        PlanItem.tipo_vehiculo_id.is_(None)
+                    )
+                )
+
+        # =====================================================
+        # MAQUINARIA
+        # =====================================================
+
+        elif tipo_activo == 'MAQUINARIA':
+
+            query = query.filter(
+                PlanItem.tipo_activo == 'MAQUINARIA'
+            )
+
+            # Si recibimos tipo específico
+            if tipo_maquinaria_id is not None:
+
+                query = query.filter(
+                    db.or_(
+                        PlanItem.tipo_maquinaria_id == tipo_maquinaria_id,
+                        PlanItem.tipo_maquinaria_id.is_(None)
+                    )
+                )
+
+        # =====================================================
+        # SI NO VIENE TIPO
+        # =====================================================
+
+        else:
+
+            # Comportamiento anterior:
+            # devolver todos los plan items activos.
+
+            pass
+
+        # =====================================================
+        # ORDEN
+        # =====================================================
+
+        planes = query.order_by(
+            PlanItem.sistema.asc(),
+            PlanItem.nombre.asc()
+        ).all()
+
+        print(
+            "PLAN ITEMS ENCONTRADOS:",
+            len(planes)
+        )
+
+        # =====================================================
+        # RESPUESTA
+        # =====================================================
+
+        return jsonify([
+            plan.to_dict()
+            for plan in planes
+        ]), 200
+
+    except Exception as e:
+
+        import traceback
+
+        traceback.print_exc()
+
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
 # =========================================================
 # OBTENER UNO
 # =========================================================
@@ -70,6 +176,19 @@ def crear_plan_item():
         'tipo_activo',
         'VEHICULO'
     )
+    
+    # =====================================================
+    # VALIDAR TIPO ESPECÍFICO DE ACTIVO
+    # =====================================================
+
+    tipo_vehiculo_id = data.get(
+        'tipo_vehiculo_id'
+    )
+
+    tipo_maquinaria_id = data.get(
+        'tipo_maquinaria_id'
+    )
+
 
     tipo_control = data.get(
         'tipo_control',
@@ -125,10 +244,50 @@ def crear_plan_item():
                 )
             }), 400
 
+    
+        if tipo_activo == 'VEHICULO':
+
+            # Un plan de vehículo no puede tener
+            # tipo de maquinaria
+            tipo_maquinaria_id = None
+
+            if tipo_vehiculo_id is not None:
+
+                tipo_vehiculo = TipoVehiculo.query.get(
+                    tipo_vehiculo_id
+                )
+
+                if not tipo_vehiculo:
+                    return jsonify({
+                        "error": (
+                            "El tipo de vehículo "
+                            "no existe"
+                        )
+                    }), 400
+
+        elif tipo_activo == 'MAQUINARIA':
+
+            # Un plan de maquinaria no puede tener
+            # tipo de vehículo
+            tipo_vehiculo_id = None
+
+            if tipo_maquinaria_id is not None:
+
+                tipo_maquinaria = TipoMaquinaria.query.get(
+                    tipo_maquinaria_id
+                )
+
+                if not tipo_maquinaria:
+                    return jsonify({
+                        "error": (
+                            "El tipo de maquinaria "
+                            "no existe"
+                        )
+                    }), 400
+    
     # =====================================================
     # CREAR PLAN ITEM
     # =====================================================
-
     item = PlanItem(
 
         sistema=data.get(
@@ -150,6 +309,10 @@ def crear_plan_item():
 
         tipo_activo=tipo_activo,
 
+        tipo_vehiculo_id=tipo_vehiculo_id,
+
+        tipo_maquinaria_id=tipo_maquinaria_id,
+
         tipo_control=tipo_control,
 
         frecuencia_valor=data.get(
@@ -170,7 +333,6 @@ def crear_plan_item():
             True
         )
     )
-
     db.session.add(item)
 
     # =====================================================
@@ -270,6 +432,63 @@ def actualizar_plan_item(id):
         'tipo_control',
         item.tipo_control
     )
+        # =====================================================
+    # TIPO ESPECÍFICO DE ACTIVO
+    # =====================================================
+
+    nuevo_tipo_vehiculo_id = data.get(
+        'tipo_vehiculo_id',
+        item.tipo_vehiculo_id
+    )
+
+    nuevo_tipo_maquinaria_id = data.get(
+        'tipo_maquinaria_id',
+        item.tipo_maquinaria_id
+    )
+
+    # -----------------------------------------------------
+    # VEHÍCULO
+    # -----------------------------------------------------
+
+    if nuevo_tipo_activo == 'VEHICULO':
+
+        nuevo_tipo_maquinaria_id = None
+
+        if nuevo_tipo_vehiculo_id is not None:
+
+            tipo_vehiculo = TipoVehiculo.query.get(
+                nuevo_tipo_vehiculo_id
+            )
+
+            if not tipo_vehiculo:
+                return jsonify({
+                    "error": (
+                        "El tipo de vehículo "
+                        "no existe"
+                    )
+                }), 400
+
+    # -----------------------------------------------------
+    # MAQUINARIA
+    # -----------------------------------------------------
+
+    elif nuevo_tipo_activo == 'MAQUINARIA':
+
+        nuevo_tipo_vehiculo_id = None
+
+        if nuevo_tipo_maquinaria_id is not None:
+
+            tipo_maquinaria = TipoMaquinaria.query.get(
+                nuevo_tipo_maquinaria_id
+            )
+
+            if not tipo_maquinaria:
+                return jsonify({
+                    "error": (
+                        "El tipo de maquinaria "
+                        "no existe"
+                    )
+                }), 400
 
     # =====================================================
     # VALIDACIONES
@@ -332,6 +551,13 @@ def actualizar_plan_item(id):
 
     item.tipo_activo = nuevo_tipo_activo
 
+    item.tipo_vehiculo_id = (
+        nuevo_tipo_vehiculo_id
+    )
+
+    item.tipo_maquinaria_id = (
+        nuevo_tipo_maquinaria_id
+    )
     item.tipo_control = nuevo_tipo_control
 
     item.frecuencia_valor = data.get(
@@ -463,3 +689,53 @@ def eliminar_plan_item(id):
     return jsonify({
         "msg": "Plan eliminado"
     })
+    
+    
+# =========================================================
+# TIPOS DE VEHÍCULO
+# =========================================================
+@plan_items_bp.route(
+    '/plan-items/tipos-vehiculo',
+    methods=['GET']
+)
+def listar_tipos_vehiculo():
+
+    try:
+        tipos = TipoVehiculo.query.order_by(
+            TipoVehiculo.nombre.asc()
+        ).all()
+
+        return jsonify([
+            tipo.to_dict()
+            for tipo in tipos
+        ]), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+# =========================================================
+# TIPOS DE MAQUINARIA
+# =========================================================
+
+@plan_items_bp.route(
+    '/plan-items/tipos-maquinaria',
+    methods=['GET']
+)
+def listar_tipos_maquinaria():
+
+    tipos = TipoMaquinaria.query.order_by(
+        TipoMaquinaria.nombre.asc()
+    ).all()
+
+    return jsonify([
+        {
+            "id": tipo.id,
+            "nombre": tipo.nombre
+        }
+        for tipo in tipos
+    ])

@@ -3,17 +3,23 @@ from flask_jwt_extended import jwt_required
 
 from services.usuario_services import UsuarioService
 
+from models import TipoOperador
+
 
 usuarios_bp = Blueprint(
     "usuarios",
     __name__
 )
 
+
 # =====================================================
 # LISTAR
 # =====================================================
 
-@usuarios_bp.route("/", methods=["GET"])
+@usuarios_bp.route(
+    "/",
+    methods=["GET"]
+)
 @jwt_required()
 def listar():
 
@@ -23,15 +29,67 @@ def listar():
 
 
 # =====================================================
+# LISTAR TIPOS DE OPERADOR
+# =====================================================
+
+@usuarios_bp.route(
+    "/tipos-operador",
+    methods=["GET"]
+)
+@jwt_required()
+def listar_tipos_operador():
+
+    tipos = (
+        TipoOperador.query
+        .filter_by(activo=True)
+        .order_by(
+            TipoOperador.id
+        )
+        .all()
+    )
+
+    return jsonify({
+        "success": True,
+        "data": [
+            tipo.to_dict()
+            for tipo in tipos
+        ]
+    })
+
+
+# =====================================================
+# LISTAR DOCUMENTOS SEGÚN TIPO DE OPERADOR
+# =====================================================
+
+@usuarios_bp.route(
+    "/tipos-operador/<int:tipo_operador_id>/documentos",
+    methods=["GET"]
+)
+@jwt_required()
+def listar_documentos_tipo_operador(
+    tipo_operador_id
+):
+
+    return UsuarioService.listar_documentos_tipo_operador(
+        tipo_operador_id
+    )
+
+
+# =====================================================
 # OBTENER POR ID
 # =====================================================
 
-@usuarios_bp.route("/<int:usuario_id>", methods=["GET"])
+@usuarios_bp.route(
+    "/<int:usuario_id>",
+    methods=["GET"]
+)
 @jwt_required()
 def obtener(usuario_id):
 
     return jsonify(
-        UsuarioService.obtener(usuario_id)
+        UsuarioService.obtener(
+            usuario_id
+        )
     )
 
 
@@ -39,20 +97,28 @@ def obtener(usuario_id):
 # CREAR
 # =====================================================
 
-@usuarios_bp.route("/", methods=["POST"])
+@usuarios_bp.route(
+    "/",
+    methods=["POST"]
+)
 @jwt_required()
 def crear():
 
     data = request.get_json()
 
-    return UsuarioService.crear(data)
+    return UsuarioService.crear(
+        data
+    )
 
 
 # =====================================================
 # ACTUALIZAR
 # =====================================================
 
-@usuarios_bp.route("/<int:usuario_id>", methods=["PUT"])
+@usuarios_bp.route(
+    "/<int:usuario_id>",
+    methods=["PUT"]
+)
 @jwt_required()
 def actualizar(usuario_id):
 
@@ -68,7 +134,10 @@ def actualizar(usuario_id):
 # ELIMINAR (DESACTIVAR)
 # =====================================================
 
-@usuarios_bp.route("/<int:usuario_id>", methods=["DELETE"])
+@usuarios_bp.route(
+    "/<int:usuario_id>",
+    methods=["DELETE"]
+)
 @jwt_required()
 def eliminar(usuario_id):
 
