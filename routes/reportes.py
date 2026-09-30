@@ -3299,7 +3299,7 @@ def exportar_indicador_mantenimiento():
                 cell.border = border
 
         ruta_logo = (
-            'static/logo_transmena.jpg'
+            'static/logo.jpg'
         )
 
         if os.path.exists(ruta_logo):
@@ -3318,7 +3318,7 @@ def exportar_indicador_mantenimiento():
 
         else:
 
-            ws['A1'] = 'TRANSMENA'
+            ws['A1'] = 'INTELLIFLEET'
 
             ws['A1'].font = titulo_font
 

@@ -56,3 +56,34 @@ def actualizar_documento(documento_id):
 def listar_tipos():
 
     return UsuarioDocumentoService.listar_tipos()
+
+
+# =====================================================
+# CREAR DOCUMENTO DE USUARIO
+# =====================================================
+
+@usuario_documento_bp.route(
+    "/<int:usuario_id>/documentos",
+    methods=["POST"]
+)
+def crear_documento(usuario_id):
+
+    data = request.get_json() or {}
+
+    return UsuarioDocumentoService.crear(
+        usuario_id,
+        data
+    )
+    
+    
+# =====================================================
+# LISTAR DOCUMENTOS DE TODOS LOS OPERADORES
+# =====================================================
+
+@usuario_documento_bp.route(
+    "/documentos/operadores",
+    methods=["GET"]
+)
+def listar_operadores_documentos():
+
+    return UsuarioDocumentoService.listar_operadores_documentos()

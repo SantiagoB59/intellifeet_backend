@@ -1533,189 +1533,2050 @@ class InspeccionService:
 
         return AnomaliaFoto.query.filter(AnomaliaFoto.anomalia_id == anomalia_id).all()
 
+
     @staticmethod
     def descargar_pdf(inspeccion_id):
 
+        import os
+        from io import BytesIO
+
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import (
+            getSampleStyleSheet,
+            ParagraphStyle
+        )
+        from reportlab.lib.units import mm
+        from reportlab.platypus import (
+            SimpleDocTemplate,
+            Paragraph,
+            Spacer,
+            Table,
+            TableStyle,
+            Image as RLImage,
+            KeepTogether
+        )
+
+        # =========================================================
+        # OBTENER INSPECCIÓN
+        # =========================================================
+
         inspeccion = InspeccionService.obtener_inspeccion(inspeccion_id)
 
+        if not inspeccion:
+            raise ValueError("La inspección no existe.")
+
         buffer = BytesIO()
+
+        # =========================================================
+        # COLORES CORPORATIVOS
+        # =========================================================
+
+        AZUL_OSCURO = colors.HexColor("#172554")
+        AZUL = colors.HexColor("#1E40AF")
+        AZUL_MEDIO = colors.HexColor("#2563EB")
+        AZUL_CLARO = colors.HexColor("#EFF6FF")
+
+        VERDE = colors.HexColor("#15803D")
+        VERDE_CLARO = colors.HexColor("#DCFCE7")
+
+        ROJO = colors.HexColor("#B91C1C")
+        ROJO_CLARO = colors.HexColor("#FEE2E2")
+
+        NARANJA = colors.HexColor("#C2410C")
+        NARANJA_CLARO = colors.HexColor("#FFEDD5")
+
+        GRIS_OSCURO = colors.HexColor("#374151")
+        GRIS = colors.HexColor("#6B7280")
+        GRIS_CLARO = colors.HexColor("#F3F4F6")
+        GRIS_BORDE = colors.HexColor("#D1D5DB")
+        BLANCO = colors.white
+
+        # =========================================================
+        # DOCUMENTO
+        # =========================================================
 
         doc = SimpleDocTemplate(
             buffer,
             pagesize=A4,
-            rightMargin=25,
-            leftMargin=25,
-            topMargin=25,
-            bottomMargin=25,
+            rightMargin=16 * mm,
+            leftMargin=16 * mm,
+            topMargin=20 * mm,
+            bottomMargin=18 * mm,
+            title="Inspección Preoperacional",
+            author="IntelliFeet"
         )
 
         estilos = getSampleStyleSheet()
 
         titulo = ParagraphStyle(
-            "Titulo",
+            "TituloIntelliFeet",
             parent=estilos["Heading1"],
-            fontSize=18,
-            alignment=1,
-            spaceAfter=15,
+            fontName="Helvetica-Bold",
+            fontSize=17,
+            leading=21,
+            textColor=AZUL_OSCURO,
+            alignment=TA_LEFT,
+            spaceAfter=3,
         )
 
         subtitulo = ParagraphStyle(
-            "Subtitulo",
+            "SubtituloIntelliFeet",
             parent=estilos["Heading2"],
-            fontSize=12,
-            textColor=colors.darkblue,
-            spaceBefore=12,
-            spaceAfter=8,
+            fontName="Helvetica-Bold",
+            fontSize=10.5,
+            leading=14,
+            textColor=AZUL_OSCURO,
+            spaceBefore=10,
+            spaceAfter=6,
         )
 
-        normal = estilos["BodyText"]
+        seccion = ParagraphStyle(
+            "SeccionIntelliFeet",
+            parent=estilos["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=10,
+            leading=13,
+            textColor=BLANCO,
+            alignment=TA_LEFT,
+        )
+
+        normal = ParagraphStyle(
+            "NormalIntelliFeet",
+            parent=estilos["BodyText"],
+            fontName="Helvetica",
+            fontSize=8.5,
+            leading=11,
+            textColor=GRIS_OSCURO,
+        )
+
+        pequeño = ParagraphStyle(
+            "PequenoIntelliFeet",
+            parent=estilos["BodyText"],
+            fontName="Helvetica",
+            fontSize=7,
+            leading=9,
+            textColor=GRIS,
+        )
+
+        pregunta_style = ParagraphStyle(
+            "PreguntaIntelliFeet",
+            parent=normal,
+            fontName="Helvetica",
+            fontSize=7.8,
+            leading=10,
+        )
+
+        respuesta_style = ParagraphStyle(
+            "RespuestaIntelliFeet",
+            parent=normal,
+            fontName="Helvetica-Bold",
+            fontSize=7.8,
+            leading=10,
+        )
+
+        observacion_style = ParagraphStyle(
+            "ObservacionIntelliFeet",
+            parent=normal,
+            fontSize=7.5,
+            leading=9.5,
+        )
+
+        centro = ParagraphStyle(
+            "CentroIntelliFeet",
+            parent=normal,
+            alignment=TA_CENTER,
+        )
+
+        # =========================================================
+        # HELPERS
+        # =========================================================
+
+        def texto(valor, defecto=""):
+            if valor is None:
+                return defecto
+
+            valor = str(valor).strip()
+
+            if not valor:
+                return defecto
+
+            return valor
+
+        def safe_paragraph(valor, style=normal, defecto="-"):
+            return Paragraph(
+                texto(valor, defecto).replace("&", "&amp;"),
+                style
+            )
+
+        def fecha_formateada(fecha):
+            if not fecha:
+                return "-"
+
+            try:
+                return fecha.strftime("%d/%m/%Y %H:%M")
+            except Exception:
+                return str(fecha)
+
+        def obtener_estado_color(estado):
+
+            estado = texto(estado).upper()
+
+            if estado == "FINALIZADA":
+                return VERDE, VERDE_CLARO
+
+            if estado == "REVISADA":
+                return AZUL, AZUL_CLARO
+
+            if estado == "PENDIENTE_CIERRE":
+                return NARANJA, NARANJA_CLARO
+
+            if estado == "ANULADA":
+                return ROJO, ROJO_CLARO
+
+            return GRIS_OSCURO, GRIS_CLARO
+
+        # =========================================================
+        # RESOLVER RUTAS DE ARCHIVOS
+        # =========================================================
+
+        def buscar_archivo(ruta):
+
+            if not ruta:
+                return None
+
+            ruta = str(ruta).strip()
+
+            if not ruta:
+                return None
+
+            # -----------------------------------------------------
+            # Ruta absoluta
+            # -----------------------------------------------------
+
+            if os.path.isabs(ruta) and os.path.exists(ruta):
+                return ruta
+
+            # -----------------------------------------------------
+            # Limpiar posibles URLs
+            # -----------------------------------------------------
+
+            ruta_limpia = ruta.replace("\\", "/")
+
+            if "://" in ruta_limpia:
+                ruta_limpia = ruta_limpia.split("://", 1)[1]
+
+                partes = ruta_limpia.split("/", 1)
+
+                if len(partes) == 2:
+                    ruta_limpia = partes[1]
+
+            # -----------------------------------------------------
+            # Eliminar slash inicial
+            # -----------------------------------------------------
+
+            ruta_limpia = ruta_limpia.lstrip("/")
+
+            # -----------------------------------------------------
+            # Posibles ubicaciones
+            # -----------------------------------------------------
+
+            candidatos = [
+                ruta_limpia,
+
+                os.path.join(
+                    "uploads",
+                    ruta_limpia
+                ),
+
+                os.path.join(
+                    "uploads",
+                    "inspecciones",
+                    ruta_limpia
+                ),
+
+                os.path.join(
+                    "static",
+                    ruta_limpia
+                ),
+
+                os.path.join(
+                    "static",
+                    "uploads",
+                    ruta_limpia
+                ),
+
+                os.path.join(
+                    "static",
+                    "inspecciones",
+                    ruta_limpia
+                ),
+            ]
+
+            # -----------------------------------------------------
+            # Si empieza por uploads/inspecciones
+            # -----------------------------------------------------
+
+            if ruta_limpia.startswith(
+                "uploads/inspecciones/"
+            ):
+                candidatos.append(ruta_limpia)
+
+            # -----------------------------------------------------
+            # Buscar
+            # -----------------------------------------------------
+
+            for candidato in candidatos:
+
+                if os.path.exists(candidato):
+                    return candidato
+
+            return None
+
+        # =========================================================
+        # AGREGAR IMAGEN
+        # =========================================================
+
+        def crear_imagen(
+            ruta,
+            ancho_max=70 * mm,
+            alto_max=50 * mm
+        ):
+
+            ruta_real = buscar_archivo(ruta)
+
+            if not ruta_real:
+                return None
+
+            try:
+
+                imagen = RLImage(
+                    ruta_real
+                )
+
+                # -------------------------------------------------
+                # Mantener proporción
+                # -------------------------------------------------
+
+                ancho_original = imagen.imageWidth
+                alto_original = imagen.imageHeight
+
+                if not ancho_original or not alto_original:
+                    return None
+
+                proporcion = min(
+                    ancho_max / ancho_original,
+                    alto_max / alto_original
+                )
+
+                imagen.drawWidth = (
+                    ancho_original * proporcion
+                )
+
+                imagen.drawHeight = (
+                    alto_original * proporcion
+                )
+
+                return imagen
+
+            except Exception:
+                return None
+
+        # =========================================================
+        # PIE DE PÁGINA
+        # =========================================================
+
+        def dibujar_footer(canvas, documento):
+
+            canvas.saveState()
+
+            ancho, alto = A4
+
+            canvas.setStrokeColor(GRIS_BORDE)
+            canvas.setLineWidth(0.5)
+
+            canvas.line(
+                16 * mm,
+                11 * mm,
+                ancho - 16 * mm,
+                11 * mm
+            )
+
+            canvas.setFont(
+                "Helvetica",
+                7
+            )
+
+            canvas.setFillColor(GRIS)
+
+            canvas.drawString(
+                16 * mm,
+                6 * mm,
+                "IntelliFeet · Sistema de Gestión Operacional"
+            )
+
+            canvas.drawRightString(
+                ancho - 16 * mm,
+                6 * mm,
+                f"Página {documento.page}"
+            )
+
+            canvas.restoreState()
+
+        # =========================================================
+        # CONTENEDOR PRINCIPAL
+        # =========================================================
 
         elementos = []
 
-        # ==========================================
-        # LOGO
-        # ==========================================
+        # =========================================================
+        # HEADER
+        # =========================================================
 
-        logo = "static/intellifeet.png"
+        logo_path = buscar_archivo(
+            "static/intellifeet.png"
+        )
 
-        if os.path.exists(logo):
+        logo = None
 
-            img = RLImage(logo, width=140, height=70)
+        if logo_path:
 
-            img.hAlign = "CENTER"
+            try:
 
-            elementos.append(img)
+                logo = RLImage(
+                    logo_path,
+                    width=40 * mm,
+                    height=18 * mm,
+                    kind="proportional"
+                )
 
-        elementos.append(Paragraph("FORMATO DE INSPECCIÓN PREOPERACIONAL", titulo))
+            except Exception:
+                logo = None
 
-        elementos.append(Spacer(1, 15))
-
-        # ==========================================
-        # INFORMACIÓN GENERAL
-        # ==========================================
-
-        activo = ""
-
-        if inspeccion.vehiculo:
-
-            activo = inspeccion.vehiculo.placa
-
-        elif inspeccion.maquinaria:
-
-            activo = inspeccion.maquinaria.codigo
-
-        datos = [
-            ["Operador", inspeccion.usuario.nombre],
-            ["Activo", activo],
-            ["Plantilla", inspeccion.plantilla.nombre],
-            ["Estado", inspeccion.estado],
-            ["Inicio", inspeccion.hora_inicio.strftime("%d/%m/%Y %H:%M")],
-            [
-                "Fin",
-                (
-                    inspeccion.hora_fin.strftime("%d/%m/%Y %H:%M")
-                    if inspeccion.hora_fin
-                    else ""
-                ),
-            ],
+        encabezado_texto = [
+            Paragraph(
+                "FORMATO DE INSPECCIÓN<br/>PREOPERACIONAL",
+                titulo
+            ),
+            Spacer(1, 2 * mm),
+            Paragraph(
+                "Registro de control operacional del activo",
+                pequeño
+            )
         ]
 
-        tabla = Table(datos, colWidths=[120, 320])
+        if logo:
 
-        tabla.setStyle(
-            TableStyle(
-                [
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#1F4E78")),
-                    ("TEXTCOLOR", (0, 0), (0, -1), colors.white),
-                    ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-                    ("BACKGROUND", (1, 0), (1, -1), colors.whitesmoke),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            header = Table(
+                [[
+                    logo,
+                    encabezado_texto
+                ]],
+                colWidths=[
+                    48 * mm,
+                    125 * mm
                 ]
+            )
+
+        else:
+
+            header = Table(
+                [[
+                    Paragraph(
+                        "<b>IntelliFeet</b>",
+                        titulo
+                    ),
+                    encabezado_texto
+                ]],
+                colWidths=[
+                    48 * mm,
+                    125 * mm
+                ]
+            )
+
+        header.setStyle(
+            TableStyle([
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "MIDDLE"
+                ),
+                (
+                    "LEFTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    0
+                ),
+                (
+                    "RIGHTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    0
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    0
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    0
+                ),
+            ])
+        )
+
+        elementos.append(header)
+
+        elementos.append(
+            Spacer(1, 7 * mm)
+        )
+
+        # =========================================================
+        # ESTADO
+        # =========================================================
+
+        estado_texto = texto(
+            inspeccion.estado,
+            "SIN ESTADO"
+        ).replace("_", " ")
+
+        estado_color, estado_fondo = (
+            obtener_estado_color(
+                inspeccion.estado
             )
         )
 
-        elementos.append(tabla)
+        estado_badge = Table(
+            [[
+                Paragraph(
+                    f"<b>{estado_texto}</b>",
+                    ParagraphStyle(
+                        "EstadoBadge",
+                        parent=normal,
+                        fontSize=8,
+                        textColor=estado_color,
+                        alignment=TA_CENTER
+                    )
+                )
+            ]],
+            colWidths=[42 * mm]
+        )
 
-        elementos.append(Spacer(1, 20))
+        estado_badge.setStyle(
+            TableStyle([
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, -1),
+                    estado_fondo
+                ),
+                (
+                    "BOX",
+                    (0, 0),
+                    (-1, -1),
+                    0.7,
+                    estado_color
+                ),
+                (
+                    "LEFTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5
+                ),
+                (
+                    "RIGHTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5
+                ),
+            ])
+        )
 
-        # ==========================================
-        # RESPUESTAS
-        # ==========================================
+        elementos.append(
+            estado_badge
+        )
+
+        elementos.append(
+            Spacer(1, 5 * mm)
+        )
+
+        # =========================================================
+        # IDENTIFICAR ACTIVO
+        # =========================================================
+
+        activo = "-"
+
+        if inspeccion.vehiculo:
+
+            activo = texto(
+                inspeccion.vehiculo.placa
+            )
+
+        elif inspeccion.maquinaria:
+
+            activo = texto(
+                inspeccion.maquinaria.codigo
+            )
+
+        # =========================================================
+        # TIPO DE ACTIVO
+        # =========================================================
+
+        tipo_activo = "Vehículo"
+
+        if inspeccion.maquinaria:
+
+            tipo_activo = (
+                texto(
+                    inspeccion.maquinaria.tipo_maquinaria.nombre
+                )
+                if inspeccion.maquinaria.tipo_maquinaria
+                else "Maquinaria"
+            )
+
+        # =========================================================
+        # INFORMACIÓN GENERAL
+        # =========================================================
+
+        elementos.append(
+            Paragraph(
+                "INFORMACIÓN GENERAL",
+                seccion
+            )
+        )
+
+        tabla_general = Table(
+            [
+                [
+                    safe_paragraph(
+                        "OPERADOR",
+                        respuesta_style
+                    ),
+                    safe_paragraph(
+                        inspeccion.usuario.nombre
+                        if inspeccion.usuario
+                        else "-",
+                        normal
+                    ),
+
+                    safe_paragraph(
+                        "ACTIVO",
+                        respuesta_style
+                    ),
+                    safe_paragraph(
+                        activo,
+                        normal
+                    ),
+                ],
+
+                [
+                    safe_paragraph(
+                        "TIPO DE ACTIVO",
+                        respuesta_style
+                    ),
+                    safe_paragraph(
+                        tipo_activo,
+                        normal
+                    ),
+
+                    safe_paragraph(
+                        "PLANTILLA",
+                        respuesta_style
+                    ),
+                    safe_paragraph(
+                        inspeccion.plantilla.nombre
+                        if inspeccion.plantilla
+                        else "-",
+                        normal
+                    ),
+                ],
+
+                [
+                    safe_paragraph(
+                        "INICIO",
+                        respuesta_style
+                    ),
+                    safe_paragraph(
+                        fecha_formateada(
+                            inspeccion.hora_inicio
+                        ),
+                        normal
+                    ),
+
+                    safe_paragraph(
+                        "FINALIZACIÓN",
+                        respuesta_style
+                    ),
+                    safe_paragraph(
+                        fecha_formateada(
+                            inspeccion.hora_fin
+                        ),
+                        normal
+                    ),
+                ],
+            ],
+            colWidths=[
+                32 * mm,
+                54 * mm,
+                32 * mm,
+                55 * mm
+            ]
+        )
+
+        tabla_general.setStyle(
+            TableStyle([
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.5,
+                    GRIS_BORDE
+                ),
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (0, -1),
+                    AZUL_CLARO
+                ),
+                (
+                    "BACKGROUND",
+                    (2, 0),
+                    (2, -1),
+                    AZUL_CLARO
+                ),
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "MIDDLE"
+                ),
+                (
+                    "LEFTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6
+                ),
+                (
+                    "RIGHTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6
+                ),
+            ])
+        )
+
+        elementos.append(
+            tabla_general
+        )
+
+        elementos.append(
+            Spacer(1, 6 * mm)
+        )
+
+        # =========================================================
+        # LECTURAS DEL ACTIVO
+        # =========================================================
+
+        tipo_medicion = (
+            texto(
+                inspeccion.plantilla.tipo_medicion
+                if inspeccion.plantilla
+                else ""
+            ).upper()
+        )
+
+        tiene_lecturas = (
+            inspeccion.contador_inicial is not None
+            or inspeccion.contador_final is not None
+            or inspeccion.foto_contador_inicial
+            or inspeccion.foto_contador_final
+        )
+
+        if tiene_lecturas:
+
+            elementos.append(
+                Paragraph(
+                    "LECTURA DEL ACTIVO",
+                    seccion
+                )
+            )
+
+            nombre_medicion = "Lectura"
+
+            if tipo_medicion == "KILOMETRAJE":
+                nombre_medicion = "Kilometraje"
+
+            elif tipo_medicion == "HOROMETRO":
+                nombre_medicion = "Horómetro"
+
+            unidad = ""
+
+            if tipo_medicion == "KILOMETRAJE":
+                unidad = " km"
+
+            elif tipo_medicion == "HOROMETRO":
+                unidad = " h"
+
+            tabla_lecturas = Table(
+                [
+                    [
+                        safe_paragraph(
+                            "LECTURA INICIAL",
+                            respuesta_style
+                        ),
+                        safe_paragraph(
+                            (
+                                f"{inspeccion.contador_inicial}"
+                                f"{unidad}"
+                                if inspeccion.contador_inicial
+                                is not None
+                                else "-"
+                            ),
+                            normal
+                        ),
+
+                        safe_paragraph(
+                            "LECTURA FINAL",
+                            respuesta_style
+                        ),
+                        safe_paragraph(
+                            (
+                                f"{inspeccion.contador_final}"
+                                f"{unidad}"
+                                if inspeccion.contador_final
+                                is not None
+                                else "-"
+                            ),
+                            normal
+                        ),
+                    ]
+                ],
+                colWidths=[
+                    38 * mm,
+                    48 * mm,
+                    38 * mm,
+                    49 * mm
+                ]
+            )
+
+            tabla_lecturas.setStyle(
+                TableStyle([
+                    (
+                        "GRID",
+                        (0, 0),
+                        (-1, -1),
+                        0.5,
+                        GRIS_BORDE
+                    ),
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (0, 0),
+                        AZUL_CLARO
+                    ),
+                    (
+                        "BACKGROUND",
+                        (2, 0),
+                        (2, 0),
+                        AZUL_CLARO
+                    ),
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "MIDDLE"
+                    ),
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        6
+                    ),
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        6
+                    ),
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        7
+                    ),
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        7
+                    ),
+                ])
+            )
+
+            elementos.append(
+                tabla_lecturas
+            )
+
+            elementos.append(
+                Spacer(1, 4 * mm)
+            )
+
+            # -----------------------------------------------------
+            # FOTOS DE CONTADORES
+            # -----------------------------------------------------
+
+            foto_inicial = crear_imagen(
+                inspeccion.foto_contador_inicial,
+                ancho_max=75 * mm,
+                alto_max=55 * mm
+            )
+
+            foto_final = crear_imagen(
+                inspeccion.foto_contador_final,
+                ancho_max=75 * mm,
+                alto_max=55 * mm
+            )
+
+            if foto_inicial or foto_final:
+
+                celdas_fotos = []
+
+                if foto_inicial:
+
+                    celdas_fotos.append([
+                        Paragraph(
+                            "<b>Foto lectura inicial</b>",
+                            centro
+                        ),
+                        foto_inicial
+                    ])
+
+                else:
+
+                    celdas_fotos.append([
+                        Paragraph(
+                            "<b>Foto lectura inicial</b>",
+                            centro
+                        ),
+                        Paragraph(
+                            "Sin fotografía",
+                            pequeño
+                        )
+                    ])
+
+                if foto_final:
+
+                    celdas_fotos.append([
+                        Paragraph(
+                            "<b>Foto lectura final</b>",
+                            centro
+                        ),
+                        foto_final
+                    ])
+
+                else:
+
+                    celdas_fotos.append([
+                        Paragraph(
+                            "<b>Foto lectura final</b>",
+                            centro
+                        ),
+                        Paragraph(
+                            "Sin fotografía",
+                            pequeño
+                        )
+                    ])
+
+                tabla_fotos_contador = Table(
+                    [
+                        [
+                            celdas_fotos[0][0],
+                            celdas_fotos[1][0]
+                        ],
+                        [
+                            celdas_fotos[0][1],
+                            celdas_fotos[1][1]
+                        ]
+                    ],
+                    colWidths=[
+                        85 * mm,
+                        85 * mm
+                    ]
+                )
+
+                tabla_fotos_contador.setStyle(
+                    TableStyle([
+                        (
+                            "BOX",
+                            (0, 0),
+                            (-1, -1),
+                            0.5,
+                            GRIS_BORDE
+                        ),
+                        (
+                            "INNERGRID",
+                            (0, 0),
+                            (-1, -1),
+                            0.5,
+                            GRIS_BORDE
+                        ),
+                        (
+                            "BACKGROUND",
+                            (0, 0),
+                            (-1, 0),
+                            GRIS_CLARO
+                        ),
+                        (
+                            "ALIGN",
+                            (0, 0),
+                            (-1, -1),
+                            "CENTER"
+                        ),
+                        (
+                            "VALIGN",
+                            (0, 0),
+                            (-1, -1),
+                            "MIDDLE"
+                        ),
+                        (
+                            "TOPPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            6
+                        ),
+                        (
+                            "BOTTOMPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            6
+                        ),
+                    ])
+                )
+
+                elementos.append(
+                    tabla_fotos_contador
+                )
+
+                elementos.append(
+                    Spacer(1, 5 * mm)
+                )
+
+        # =========================================================
+        # RESPUESTAS DE LA INSPECCIÓN
+        # =========================================================
+
+        respuestas_por_item = {
+            r.item_id: r
+            for r in inspeccion.respuestas
+        }
 
         for categoria in inspeccion.plantilla.categorias:
 
-            elementos.append(Paragraph(categoria.nombre, subtitulo))
+            elementos.append(
+                Paragraph(
+                    texto(
+                        categoria.nombre,
+                        "Categoría"
+                    ),
+                    seccion
+                )
+            )
 
-            filas = [["Pregunta", "Respuesta", "Observación"]]
+            filas = [[
+                Paragraph(
+                    "<b>Ítem</b>",
+                    centro
+                ),
+                Paragraph(
+                    "<b>Respuesta</b>",
+                    centro
+                ),
+                Paragraph(
+                    "<b>Observación</b>",
+                    centro
+                )
+            ]]
 
-            respuestas = {r.item_id: r for r in inspeccion.respuestas}
+            filas_con_fotos = []
 
             for item in categoria.items:
 
-                r = respuestas.get(item.id)
-
-                filas.append(
-                    [item.descripcion, r.valor if r else "", r.observacion if r else ""]
+                respuesta = respuestas_por_item.get(
+                    item.id
                 )
 
-            tabla = Table(filas, colWidths=[240, 70, 170])
+                valor = (
+                    respuesta.valor
+                    if respuesta
+                    else ""
+                )
 
-            tabla.setStyle(
-                TableStyle(
-                    [
-                        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2563EB")),
-                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
-                    ]
+                observacion = (
+                    respuesta.observacion
+                    if respuesta
+                    else ""
+                )
+
+                filas.append([
+                    safe_paragraph(
+                        item.descripcion,
+                        pregunta_style
+                    ),
+                    safe_paragraph(
+                        valor,
+                        respuesta_style
+                    ),
+                    safe_paragraph(
+                        observacion,
+                        observacion_style
+                    )
+                ])
+
+                # ---------------------------------------------
+                # Fotos asociadas a la respuesta
+                # ---------------------------------------------
+
+                if respuesta and respuesta.fotos:
+
+                    fotos_validas = []
+
+                    for foto in respuesta.fotos:
+
+                        imagen = crear_imagen(
+                            foto.archivo,
+                            ancho_max=48 * mm,
+                            alto_max=42 * mm
+                        )
+
+                        if imagen:
+
+                            fotos_validas.append(
+                                (
+                                    foto,
+                                    imagen
+                                )
+                            )
+
+                    if fotos_validas:
+
+                        fotos_fila = []
+
+                        for foto, imagen in fotos_validas:
+
+                            info = [
+                                imagen,
+                                Spacer(1, 1 * mm)
+                            ]
+
+                            metadata = []
+
+                            if foto.direccion:
+
+                                metadata.append(
+                                    texto(
+                                        foto.direccion
+                                    )
+                                )
+
+                            if foto.fecha_dispositivo:
+
+                                metadata.append(
+                                    fecha_formateada(
+                                        foto.fecha_dispositivo
+                                    )
+                                )
+
+                            if (
+                                foto.latitud is not None
+                                and foto.longitud is not None
+                            ):
+
+                                metadata.append(
+                                    (
+                                        f"GPS: "
+                                        f"{float(foto.latitud):.6f}, "
+                                        f"{float(foto.longitud):.6f}"
+                                    )
+                                )
+
+                            if metadata:
+
+                                info.append(
+                                    Paragraph(
+                                        "<br/>".join(
+                                            metadata
+                                        ),
+                                        pequeño
+                                    )
+                                )
+
+                            bloque = Table(
+                                [[
+                                    info
+                                ]],
+                                colWidths=[
+                                    53 * mm
+                                ]
+                            )
+
+                            bloque.setStyle(
+                                TableStyle([
+                                    (
+                                        "BOX",
+                                        (0, 0),
+                                        (-1, -1),
+                                        0.4,
+                                        GRIS_BORDE
+                                    ),
+                                    (
+                                        "ALIGN",
+                                        (0, 0),
+                                        (-1, -1),
+                                        "CENTER"
+                                    ),
+                                    (
+                                        "VALIGN",
+                                        (0, 0),
+                                        (-1, -1),
+                                        "MIDDLE"
+                                    ),
+                                    (
+                                        "TOPPADDING",
+                                        (0, 0),
+                                        (-1, -1),
+                                        4
+                                    ),
+                                    (
+                                        "BOTTOMPADDING",
+                                        (0, 0),
+                                        (-1, -1),
+                                        4
+                                    ),
+                                ])
+                            )
+
+                            fotos_fila.append(
+                                bloque
+                            )
+
+                        # -----------------------------------------
+                        # Agregar fila de fotografías
+                        # -----------------------------------------
+
+                        if fotos_fila:
+
+                            while len(fotos_fila) < 3:
+
+                                fotos_fila.append(
+                                    ""
+                                )
+
+                            filas.append([
+                                Paragraph(
+                                    "<b>Fotografías</b>",
+                                    pequeño
+                                ),
+                                "",
+                                Table(
+                                    [fotos_fila],
+                                    colWidths=[
+                                        57 * mm,
+                                        57 * mm,
+                                        57 * mm
+                                    ]
+                                )
+                            ])
+
+            tabla_respuestas = Table(
+                filas,
+                colWidths=[
+                    75 * mm,
+                    28 * mm,
+                    83 * mm,
+                ],
+                repeatRows=1
+            )
+
+            tabla_respuestas.setStyle(
+                TableStyle([
+                    (
+                        "GRID",
+                        (0, 0),
+                        (-1, -1),
+                        0.35,
+                        GRIS_BORDE
+                    ),
+
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (-1, 0),
+                        AZUL_MEDIO
+                    ),
+
+                    (
+                        "TEXTCOLOR",
+                        (0, 0),
+                        (-1, 0),
+                        BLANCO
+                    ),
+
+                    (
+                        "FONTNAME",
+                        (0, 0),
+                        (-1, 0),
+                        "Helvetica-Bold"
+                    ),
+
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "TOP"
+                    ),
+
+                    (
+                        "ROWBACKGROUNDS",
+                        (0, 1),
+                        (-1, -1),
+                        [
+                            BLANCO,
+                            colors.HexColor("#F8FAFC")
+                        ]
+                    ),
+
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5
+                    ),
+
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5
+                    ),
+
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5
+                    ),
+
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5
+                    ),
+                ])
+            )
+
+            elementos.append(
+                tabla_respuestas
+            )
+
+            elementos.append(
+                Spacer(1, 5 * mm)
+            )
+
+        # =========================================================
+        # OBSERVACIONES GENERALES
+        # =========================================================
+
+        if inspeccion.observaciones_generales:
+
+            elementos.append(
+                Paragraph(
+                    "OBSERVACIONES GENERALES",
+                    seccion
                 )
             )
 
-            elementos.append(tabla)
+            tabla_observaciones = Table(
+                [[
+                    safe_paragraph(
+                        inspeccion.observaciones_generales,
+                        normal
+                    )
+                ]],
+                colWidths=[186 * mm]
+            )
 
-            elementos.append(Spacer(1, 10))
+            tabla_observaciones.setStyle(
+                TableStyle([
+                    (
+                        "BOX",
+                        (0, 0),
+                        (-1, -1),
+                        0.5,
+                        GRIS_BORDE
+                    ),
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (-1, -1),
+                        GRIS_CLARO
+                    ),
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        8
+                    ),
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        8
+                    ),
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        8
+                    ),
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        8
+                    ),
+                ])
+            )
 
-        # ==========================================
+            elementos.append(
+                tabla_observaciones
+            )
+
+            elementos.append(
+                Spacer(1, 5 * mm)
+            )
+
+        # =========================================================
         # ANOMALÍAS
-        # ==========================================
+        # =========================================================
+
+        elementos.append(
+            Paragraph(
+                "ANOMALÍAS REPORTADAS",
+                seccion
+            )
+        )
 
         if inspeccion.anomalias:
 
-            elementos.append(Paragraph("Anomalías reportadas", subtitulo))
+            for anomalia in inspeccion.anomalias:
 
-            filas = [["Título", "Descripción", "Prioridad"]]
+                prioridad = texto(
+                    anomalia.prioridad,
+                    "MEDIA"
+                ).upper()
 
-            for a in inspeccion.anomalias:
+                if prioridad == "CRITICA":
+                    color_prioridad = ROJO
+                    fondo_prioridad = ROJO_CLARO
 
-                filas.append([a.titulo, a.descripcion, a.prioridad])
+                elif prioridad == "ALTA":
+                    color_prioridad = NARANJA
+                    fondo_prioridad = NARANJA_CLARO
 
-            tabla = Table(filas, colWidths=[150, 250, 90])
+                elif prioridad == "BAJA":
+                    color_prioridad = VERDE
+                    fondo_prioridad = VERDE_CLARO
 
-            tabla.setStyle(
-                TableStyle(
-                    [
-                        ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.red),
-                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                else:
+                    color_prioridad = GRIS_OSCURO
+                    fondo_prioridad = GRIS_CLARO
+
+                cabecera_anomalia = Table(
+                    [[
+                        safe_paragraph(
+                            anomalia.titulo,
+                            respuesta_style
+                        ),
+                        Paragraph(
+                            f"<b>{prioridad}</b>",
+                            ParagraphStyle(
+                                "Prioridad",
+                                parent=normal,
+                                fontSize=7.5,
+                                alignment=TA_CENTER,
+                                textColor=color_prioridad
+                            )
+                        )
+                    ]],
+                    colWidths=[
+                        145 * mm,
+                        41 * mm
                     ]
+                )
+
+                cabecera_anomalia.setStyle(
+                    TableStyle([
+                        (
+                            "BOX",
+                            (0, 0),
+                            (-1, -1),
+                            0.5,
+                            GRIS_BORDE
+                        ),
+                        (
+                            "BACKGROUND",
+                            (1, 0),
+                            (1, 0),
+                            fondo_prioridad
+                        ),
+                        (
+                            "VALIGN",
+                            (0, 0),
+                            (-1, -1),
+                            "MIDDLE"
+                        ),
+                        (
+                            "LEFTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            7
+                        ),
+                        (
+                            "RIGHTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            7
+                        ),
+                        (
+                            "TOPPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            6
+                        ),
+                        (
+                            "BOTTOMPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            6
+                        ),
+                    ])
+                )
+
+                elementos.append(
+                    cabecera_anomalia
+                )
+
+                descripcion = Table(
+                    [[
+                        safe_paragraph(
+                            anomalia.descripcion,
+                            normal,
+                            "Sin descripción."
+                        )
+                    ]],
+                    colWidths=[186 * mm]
+                )
+
+                descripcion.setStyle(
+                    TableStyle([
+                        (
+                            "BOX",
+                            (0, 0),
+                            (-1, -1),
+                            0.5,
+                            GRIS_BORDE
+                        ),
+                        (
+                            "LEFTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            7
+                        ),
+                        (
+                            "RIGHTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            7
+                        ),
+                        (
+                            "TOPPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            7
+                        ),
+                        (
+                            "BOTTOMPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            7
+                        ),
+                    ])
+                )
+
+                elementos.append(
+                    descripcion
+                )
+
+                # -------------------------------------------------
+                # FOTOS DE LA ANOMALÍA
+                # -------------------------------------------------
+
+                fotos_anomalia = []
+
+                # -------------------------------------------------
+                # IMPORTANTE:
+                # actualmente InspeccionAnomalia no tiene relación
+                # declarada con AnomaliaFoto.
+                #
+                # Por eso buscamos las fotos directamente.
+                # -------------------------------------------------
+
+                fotos_db = AnomaliaFoto.query.filter_by(
+                    anomalia_id=anomalia.id
+                ).all()
+
+                for foto in fotos_db:
+
+                    imagen = crear_imagen(
+                        foto.archivo,
+                        ancho_max=55 * mm,
+                        alto_max=48 * mm
+                    )
+
+                    if imagen:
+
+                        bloque = Table(
+                            [[
+                                imagen
+                            ]],
+                            colWidths=[
+                                58 * mm
+                            ]
+                        )
+
+                        bloque.setStyle(
+                            TableStyle([
+                                (
+                                    "BOX",
+                                    (0, 0),
+                                    (-1, -1),
+                                    0.5,
+                                    GRIS_BORDE
+                                ),
+                                (
+                                    "ALIGN",
+                                    (0, 0),
+                                    (-1, -1),
+                                    "CENTER"
+                                ),
+                                (
+                                    "VALIGN",
+                                    (0, 0),
+                                    (-1, -1),
+                                    "MIDDLE"
+                                ),
+                                (
+                                    "TOPPADDING",
+                                    (0, 0),
+                                    (-1, -1),
+                                    5
+                                ),
+                                (
+                                    "BOTTOMPADDING",
+                                    (0, 0),
+                                    (-1, -1),
+                                    5
+                                ),
+                            ])
+                        )
+
+                        fotos_anomalia.append(
+                            bloque
+                        )
+
+                if fotos_anomalia:
+
+                    while len(fotos_anomalia) < 3:
+
+                        fotos_anomalia.append(
+                            ""
+                        )
+
+                    tabla_fotos_anomalia = Table(
+                        [fotos_anomalia[:3]],
+                        colWidths=[
+                            62 * mm,
+                            62 * mm,
+                            62 * mm
+                        ]
+                    )
+
+                    tabla_fotos_anomalia.setStyle(
+                        TableStyle([
+                            (
+                                "VALIGN",
+                                (0, 0),
+                                (-1, -1),
+                                "MIDDLE"
+                            ),
+                            (
+                                "ALIGN",
+                                (0, 0),
+                                (-1, -1),
+                                "CENTER"
+                            ),
+                            (
+                                "TOPPADDING",
+                                (0, 0),
+                                (-1, -1),
+                                5
+                            ),
+                            (
+                                "BOTTOMPADDING",
+                                (0, 0),
+                                (-1, -1),
+                                5
+                            ),
+                        ])
+                    )
+
+                    elementos.append(
+                        Spacer(1, 2 * mm)
+                    )
+
+                    elementos.append(
+                        Paragraph(
+                            "<b>Fotografías de la anomalía</b>",
+                            pequeño
+                        )
+                    )
+
+                    elementos.append(
+                        tabla_fotos_anomalia
+                    )
+
+                elementos.append(
+                    Spacer(1, 4 * mm)
+                )
+
+        else:
+
+            sin_anomalias = Table(
+                [[
+                    Paragraph(
+                        "✓ INSPECCIÓN SIN ANOMALÍAS REPORTADAS",
+                        ParagraphStyle(
+                            "SinAnomalias",
+                            parent=normal,
+                            fontName="Helvetica-Bold",
+                            fontSize=8,
+                            alignment=TA_CENTER,
+                            textColor=VERDE
+                        )
+                    )
+                ]],
+                colWidths=[186 * mm]
+            )
+
+            sin_anomalias.setStyle(
+                TableStyle([
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (-1, -1),
+                        VERDE_CLARO
+                    ),
+                    (
+                        "BOX",
+                        (0, 0),
+                        (-1, -1),
+                        0.5,
+                        VERDE
+                    ),
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        9
+                    ),
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        9
+                    ),
+                ])
+            )
+
+            elementos.append(
+                sin_anomalias
+            )
+
+        # =========================================================
+        # FIRMA DEL OPERADOR
+        # =========================================================
+
+        elementos.append(
+            Spacer(1, 6 * mm)
+        )
+
+        elementos.append(
+            Paragraph(
+                "CIERRE Y FIRMA DEL OPERADOR",
+                seccion
+            )
+        )
+
+        firma = crear_imagen(
+            inspeccion.firma_path,
+            ancho_max=70 * mm,
+            alto_max=35 * mm
+        )
+
+        firma_contenido = []
+
+        if firma:
+
+            firma_contenido.append(
+                firma
+            )
+
+        else:
+
+            firma_contenido.append(
+                Paragraph(
+                    "Firma no registrada",
+                    pequeño
                 )
             )
 
-            elementos.append(tabla)
+        firma_contenido.append(
+            Spacer(1, 2 * mm)
+        )
 
-        # ==========================================
+        firma_contenido.append(
+            Paragraph(
+                texto(
+                    inspeccion.usuario.nombre
+                    if inspeccion.usuario
+                    else "Operador"
+                ),
+                ParagraphStyle(
+                    "FirmaNombre",
+                    parent=normal,
+                    fontName="Helvetica-Bold",
+                    alignment=TA_CENTER
+                )
+            )
+        )
+
+        if inspeccion.confirmacion_fecha:
+
+            firma_contenido.append(
+                Paragraph(
+                    (
+                        "Confirmación: "
+                        + fecha_formateada(
+                            inspeccion.confirmacion_fecha
+                        )
+                    ),
+                    pequeño
+                )
+            )
+
+        firma_tabla = Table(
+            [[
+                firma_contenido
+            ]],
+            colWidths=[90 * mm]
+        )
+
+        firma_tabla.setStyle(
+            TableStyle([
+                (
+                    "BOX",
+                    (0, 0),
+                    (-1, -1),
+                    0.5,
+                    GRIS_BORDE
+                ),
+                (
+                    "ALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "CENTER"
+                ),
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "MIDDLE"
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    8
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    8
+                ),
+            ])
+        )
+
+        elementos.append(
+            firma_tabla
+        )
+
+        # =========================================================
+        # CONSENTIMIENTOS
+        # =========================================================
+
+        consentimiento = Table(
+            [[
+                Paragraph(
+                    (
+                        "Tratamiento de datos: "
+                        + (
+                            "ACEPTADO"
+                            if inspeccion.tratamiento_datos_aceptado
+                            else "NO ACEPTADO"
+                        )
+                    ),
+                    pequeño
+                ),
+                Paragraph(
+                    (
+                        "Confirmación de firma: "
+                        + (
+                            "CONFIRMADA"
+                            if inspeccion.confirma_firma
+                            else "NO CONFIRMADA"
+                        )
+                    ),
+                    pequeño
+                )
+            ]],
+            colWidths=[
+                93 * mm,
+                93 * mm
+            ]
+        )
+
+        consentimiento.setStyle(
+            TableStyle([
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, -1),
+                    GRIS_CLARO
+                ),
+                (
+                    "BOX",
+                    (0, 0),
+                    (-1, -1),
+                    0.4,
+                    GRIS_BORDE
+                ),
+                (
+                    "LEFTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6
+                ),
+                (
+                    "RIGHTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5
+                ),
+            ])
+        )
+
+        elementos.append(
+            Spacer(1, 3 * mm)
+        )
+
+        elementos.append(
+            consentimiento
+        )
+
+        # =========================================================
+        # PIE FINAL
+        # =========================================================
+
+        elementos.append(
+            Spacer(1, 7 * mm)
+        )
+
+        elementos.append(
+            Paragraph(
+                "Documento generado automáticamente por IntelliFeet. "
+                "La información contenida corresponde al registro "
+                "realizado durante la inspección preoperacional.",
+                pequeño
+            )
+        )
+
+        # =========================================================
         # GENERAR PDF
-        # ==========================================
+        # =========================================================
 
-        doc.build(elementos)
+        doc.build(
+            elementos,
+            onFirstPage=dibujar_footer,
+            onLaterPages=dibujar_footer
+        )
 
         buffer.seek(0)
 
         return buffer
+
 
     @staticmethod
     def obtener_reporte_preoperacionales(
@@ -1747,118 +3608,1033 @@ class InspeccionService:
     def descargar_reporte_preoperacionales(
         mes, anio, vehiculo_id=None, maquinaria_id=None
     ):
+        """
+        Genera reporte mensual profesional de inspecciones preoperacionales.
+        """
+
+        from io import BytesIO
+        import os
+
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import (
+            getSampleStyleSheet,
+            ParagraphStyle,
+        )
+        from reportlab.lib.units import mm
+        from reportlab.platypus import (
+            SimpleDocTemplate,
+            Paragraph,
+            Spacer,
+            Table,
+            TableStyle,
+            Image as RLImage,
+            KeepTogether,
+        )
+
+        # =========================================================
+        # OBTENER INFORMACIÓN
+        # =========================================================
 
         inspecciones = InspeccionService.obtener_reporte_preoperacionales(
-            mes, anio, vehiculo_id, maquinaria_id
+            mes,
+            anio,
+            vehiculo_id,
+            maquinaria_id
         )
 
         buffer = BytesIO()
 
+        # =========================================================
+        # COLORES CORPORATIVOS
+        # =========================================================
+
+        AZUL = colors.HexColor("#1E40AF")
+        AZUL_OSCURO = colors.HexColor("#172554")
+        AZUL_MEDIO = colors.HexColor("#2563EB")
+        AZUL_CLARO = colors.HexColor("#EFF6FF")
+
+        VERDE = colors.HexColor("#15803D")
+        VERDE_CLARO = colors.HexColor("#DCFCE7")
+
+        ROJO = colors.HexColor("#B91C1C")
+        ROJO_CLARO = colors.HexColor("#FEE2E2")
+
+        NARANJA = colors.HexColor("#C2410C")
+        NARANJA_CLARO = colors.HexColor("#FFEDD5")
+
+        GRIS_TEXTO = colors.HexColor("#334155")
+        GRIS_MEDIO = colors.HexColor("#64748B")
+        GRIS_CLARO = colors.HexColor("#F8FAFC")
+        GRIS_BORDE = colors.HexColor("#CBD5E1")
+
+        BLANCO = colors.white
+
+        # =========================================================
+        # DOCUMENTO
+        # =========================================================
+
         doc = SimpleDocTemplate(
             buffer,
             pagesize=A4,
-            rightMargin=20,
-            leftMargin=20,
-            topMargin=20,
-            bottomMargin=20,
+            rightMargin=15 * mm,
+            leftMargin=15 * mm,
+            topMargin=20 * mm,
+            bottomMargin=18 * mm,
+            title="Reporte de Inspecciones Preoperacionales",
+            author="IntelliFeet",
         )
+
+        # =========================================================
+        # ESTILOS
+        # =========================================================
 
         estilos = getSampleStyleSheet()
 
+        titulo = ParagraphStyle(
+            "TituloReporte",
+            parent=estilos["Heading1"],
+            fontName="Helvetica-Bold",
+            fontSize=17,
+            leading=20,
+            textColor=AZUL_OSCURO,
+            alignment=TA_LEFT,
+            spaceAfter=3 * mm,
+        )
+
+        subtitulo = ParagraphStyle(
+            "SubtituloReporte",
+            parent=estilos["Normal"],
+            fontName="Helvetica",
+            fontSize=9,
+            leading=12,
+            textColor=GRIS_MEDIO,
+            alignment=TA_LEFT,
+        )
+
+        seccion = ParagraphStyle(
+            "Seccion",
+            parent=estilos["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=11,
+            leading=14,
+            textColor=AZUL_OSCURO,
+            spaceBefore=3 * mm,
+            spaceAfter=3 * mm,
+        )
+
+        texto = ParagraphStyle(
+            "Texto",
+            parent=estilos["Normal"],
+            fontName="Helvetica",
+            fontSize=8.5,
+            leading=11,
+            textColor=GRIS_TEXTO,
+        )
+
+        texto_centro = ParagraphStyle(
+            "TextoCentro",
+            parent=texto,
+            alignment=TA_CENTER,
+        )
+
+        texto_blanco = ParagraphStyle(
+            "TextoBlanco",
+            parent=texto,
+            textColor=BLANCO,
+            fontName="Helvetica-Bold",
+            alignment=TA_CENTER,
+        )
+
+        resumen_numero = ParagraphStyle(
+            "ResumenNumero",
+            parent=estilos["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=16,
+            leading=18,
+            textColor=AZUL_OSCURO,
+            alignment=TA_CENTER,
+        )
+
+        resumen_label = ParagraphStyle(
+            "ResumenLabel",
+            parent=estilos["Normal"],
+            fontName="Helvetica",
+            fontSize=7.5,
+            leading=9,
+            textColor=GRIS_MEDIO,
+            alignment=TA_CENTER,
+        )
+
+        estado_style = ParagraphStyle(
+            "Estado",
+            parent=estilos["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=7,
+            leading=9,
+            alignment=TA_CENTER,
+        )
+
+        # =========================================================
+        # HELPERS
+        # =========================================================
+
+        def texto_seguro(valor, defecto="-"):
+            if valor is None:
+                return defecto
+
+            valor = str(valor).strip()
+
+            return valor if valor else defecto
+
+        def fecha_segura(fecha):
+            if not fecha:
+                return "-"
+
+            try:
+                return fecha.strftime("%d/%m/%Y")
+            except Exception:
+                return str(fecha)
+
+        def estado_badge(estado):
+            estado = texto_seguro(estado).upper()
+
+            if estado == "FINALIZADA":
+                return Paragraph(
+                    f'<font color="#15803D"><b>{estado}</b></font>',
+                    estado_style
+                )
+
+            if estado == "REVISADA":
+                return Paragraph(
+                    f'<font color="#1E40AF"><b>{estado}</b></font>',
+                    estado_style
+                )
+
+            if estado == "PENDIENTE_CIERRE":
+                return Paragraph(
+                    f'<font color="#C2410C"><b>PENDIENTE CIERRE</b></font>',
+                    estado_style
+                )
+
+            if estado == "ANULADA":
+                return Paragraph(
+                    f'<font color="#B91C1C"><b>{estado}</b></font>',
+                    estado_style
+                )
+
+            if estado == "EN_PROCESO":
+                return Paragraph(
+                    f'<font color="#C2410C"><b>EN PROCESO</b></font>',
+                    estado_style
+                )
+
+            return Paragraph(
+                f'<b>{estado}</b>',
+                estado_style
+            )
+
+        # =========================================================
+        # ELEMENTOS
+        # =========================================================
+
         elementos = []
+
+        # =========================================================
+        # ENCABEZADO
+        # =========================================================
 
         logo = "static/intellifeet.png"
 
         if os.path.exists(logo):
 
-            img = RLImage(logo, width=140, height=70)
+            img = RLImage(
+                logo,
+                width=38 * mm,
+                height=19 * mm,
+            )
 
-            img.hAlign = "CENTER"
+            img.hAlign = "LEFT"
 
-            elementos.append(img)
+            encabezado_texto = [
+                Paragraph(
+                    "REPORTE DE INSPECCIONES<br/>PREOPERACIONALES",
+                    titulo
+                ),
+                Paragraph(
+                    f"Periodo de consulta: <b>{mes:02d}/{anio}</b>",
+                    subtitulo
+                ),
+                Paragraph(
+                    "Sistema de Gestión Operacional · IntelliFeet",
+                    subtitulo
+                ),
+            ]
 
-        elementos.append(
-            Paragraph(
-                "<b>REPORTE DE INSPECCIONES PREOPERACIONALES</b>", estilos["Heading1"]
+            encabezado = Table(
+                [[img, encabezado_texto]],
+                colWidths=[48 * mm, 122 * mm],
+            )
+
+        else:
+
+            encabezado_texto = [
+                Paragraph(
+                    "REPORTE DE INSPECCIONES PREOPERACIONALES",
+                    titulo
+                ),
+                Paragraph(
+                    f"Periodo de consulta: <b>{mes:02d}/{anio}</b>",
+                    subtitulo
+                ),
+                Paragraph(
+                    "Sistema de Gestión Operacional · IntelliFeet",
+                    subtitulo
+                ),
+            ]
+
+            encabezado = Table(
+                [[encabezado_texto]],
+                colWidths=[170 * mm],
+            )
+
+        encabezado.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ]
             )
         )
 
-        elementos.append(Paragraph(f"Periodo: {mes}/{anio}", estilos["Normal"]))
+        elementos.append(encabezado)
 
-        elementos.append(Spacer(1, 15))
+        elementos.append(
+            Table(
+                [[""]],
+                colWidths=[170 * mm],
+                rowHeights=[1.5 * mm],
+                style=TableStyle(
+                    [
+                        (
+                            "BACKGROUND",
+                            (0, 0),
+                            (-1, -1),
+                            AZUL_MEDIO
+                        ),
+                        ("BOX", (0, 0), (-1, -1), 0, AZUL_MEDIO),
+                    ]
+                )
+            )
+        )
 
-        filas = [["Fecha", "Vehículo", "Operador", "Estado", "Anomalías"]]
+        elementos.append(Spacer(1, 5 * mm))
 
+        # =========================================================
+        # INFORMACIÓN DEL REPORTE
+        # =========================================================
+
+        filtro_activo = "Todos los activos"
+
+        if vehiculo_id:
+            filtro_activo = "Vehículo seleccionado"
+
+        elif maquinaria_id:
+            filtro_activo = "Maquinaria seleccionada"
+
+        informacion = Table(
+            [
+                [
+                    Paragraph("<b>PERIODO</b>", texto),
+                    Paragraph(
+                        f"{mes:02d}/{anio}",
+                        texto
+                    ),
+                    Paragraph("<b>ACTIVO</b>", texto),
+                    Paragraph(
+                        filtro_activo,
+                        texto
+                    ),
+                ]
+            ],
+            colWidths=[28 * mm, 50 * mm, 28 * mm, 64 * mm],
+        )
+
+        informacion.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (0, 0), AZUL_CLARO),
+                    ("BACKGROUND", (2, 0), (2, 0), AZUL_CLARO),
+
+                    ("TEXTCOLOR", (0, 0), (-1, -1), GRIS_TEXTO),
+
+                    ("BOX", (0, 0), (-1, -1), 0.5, GRIS_BORDE),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.3, GRIS_BORDE),
+
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 6),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ]
+            )
+        )
+
+        elementos.append(informacion)
+
+        elementos.append(Spacer(1, 6 * mm))
+
+        # =========================================================
+        # ESTADÍSTICAS
+        # =========================================================
+
+        total_inspecciones = len(inspecciones)
         total_anomalias = 0
+        total_finalizadas = 0
+        total_pendientes = 0
 
-        for i in inspecciones:
+        for inspeccion in inspecciones:
 
-            cantidad = len(i.anomalias)
+            total_anomalias += len(inspeccion.anomalias)
 
-            total_anomalias += cantidad
+            estado = texto_seguro(
+                inspeccion.estado,
+                ""
+            ).upper()
 
-            activo = ""
+            if estado in ("FINALIZADA", "REVISADA"):
+                total_finalizadas += 1
 
-            if i.vehiculo:
-                activo = i.vehiculo.placa
+            if estado == "PENDIENTE_CIERRE":
+                total_pendientes += 1
 
-            elif i.maquinaria:
-                activo = i.maquinaria.codigo
+        tarjetas = Table(
+            [
+                [
+                    [
+                        Paragraph(
+                            str(total_inspecciones),
+                            resumen_numero
+                        ),
+                        Paragraph(
+                            "TOTAL INSPECCIONES",
+                            resumen_label
+                        ),
+                    ],
+                    [
+                        Paragraph(
+                            str(total_finalizadas),
+                            resumen_numero
+                        ),
+                        Paragraph(
+                            "FINALIZADAS / REVISADAS",
+                            resumen_label
+                        ),
+                    ],
+                    [
+                        Paragraph(
+                            str(total_pendientes),
+                            resumen_numero
+                        ),
+                        Paragraph(
+                            "PENDIENTES DE CIERRE",
+                            resumen_label
+                        ),
+                    ],
+                    [
+                        Paragraph(
+                            str(total_anomalias),
+                            resumen_numero
+                        ),
+                        Paragraph(
+                            "ANOMALÍAS REPORTADAS",
+                            resumen_label
+                        ),
+                    ],
+                ]
+            ],
+            colWidths=[
+                42.5 * mm,
+                42.5 * mm,
+                42.5 * mm,
+                42.5 * mm,
+            ],
+        )
+
+        tarjetas.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (0, 0), AZUL_CLARO),
+                    ("BACKGROUND", (1, 0), (1, 0), colors.HexColor("#F0FDF4")),
+                    ("BACKGROUND", (2, 0), (2, 0), colors.HexColor("#FFF7ED")),
+                    ("BACKGROUND", (3, 0), (3, 0), colors.HexColor("#FEF2F2")),
+
+                    ("BOX", (0, 0), (-1, -1), 0.5, GRIS_BORDE),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.5, GRIS_BORDE),
+
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ("TOPPADDING", (0, 0), (-1, -1), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                ]
+            )
+        )
+
+        elementos.append(tarjetas)
+
+        elementos.append(Spacer(1, 7 * mm))
+
+        # =========================================================
+        # TÍTULO DE LA TABLA
+        # =========================================================
+
+        elementos.append(
+            Paragraph(
+                "Detalle de inspecciones",
+                seccion
+            )
+        )
+
+        # =========================================================
+        # TABLA PRINCIPAL
+        # =========================================================
+
+        filas = [
+            [
+                Paragraph("Fecha", texto_blanco),
+                Paragraph("Activo", texto_blanco),
+                Paragraph("Operador", texto_blanco),
+                Paragraph("Estado", texto_blanco),
+                Paragraph("Anomalías", texto_blanco),
+            ]
+        ]
+
+        for inspeccion in inspecciones:
+
+            cantidad_anomalias = len(
+                inspeccion.anomalias
+            )
+
+            # -----------------------------------------------------
+            # ACTIVO
+            # -----------------------------------------------------
+
+            activo = "-"
+
+            if inspeccion.vehiculo:
+
+                activo = texto_seguro(
+                    inspeccion.vehiculo.placa
+                )
+
+            elif inspeccion.maquinaria:
+
+                activo = texto_seguro(
+                    inspeccion.maquinaria.codigo
+                )
+
+            # -----------------------------------------------------
+            # OPERADOR
+            # -----------------------------------------------------
+
+            operador = "-"
+
+            if inspeccion.usuario:
+
+                operador = texto_seguro(
+                    inspeccion.usuario.nombre
+                )
+
+            # -----------------------------------------------------
+            # FECHA
+            # -----------------------------------------------------
+
+            fecha = fecha_segura(
+                inspeccion.hora_inicio
+            )
+
+            # -----------------------------------------------------
+            # ANOMALÍAS
+            # -----------------------------------------------------
+
+            if cantidad_anomalias > 0:
+
+                anomalias_cell = Paragraph(
+                    f'<font color="#B91C1C"><b>{cantidad_anomalias}</b></font>',
+                    texto_centro
+                )
+
+            else:
+
+                anomalias_cell = Paragraph(
+                    '<font color="#15803D"><b>0</b></font>',
+                    texto_centro
+                )
 
             filas.append(
                 [
-                    i.hora_inicio.strftime("%d/%m/%Y"),
-                    activo,
-                    i.usuario.nombre,
-                    i.estado,
-                    str(cantidad),
+                    Paragraph(fecha, texto_centro),
+
+                    Paragraph(
+                        f"<b>{activo}</b>",
+                        texto_centro
+                    ),
+
+                    Paragraph(
+                        operador,
+                        texto
+                    ),
+
+                    estado_badge(
+                        inspeccion.estado
+                    ),
+
+                    anomalias_cell,
                 ]
             )
 
-        tabla = Table(filas, colWidths=[70, 90, 150, 80, 80])
+        tabla = Table(
+            filas,
+            colWidths=[
+                25 * mm,
+                31 * mm,
+                55 * mm,
+                35 * mm,
+                24 * mm,
+            ],
+            repeatRows=1,
+        )
 
         tabla.setStyle(
             TableStyle(
                 [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2563EB")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                    ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+                    # -------------------------------------------------
+                    # CABECERA
+                    # -------------------------------------------------
+
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (-1, 0),
+                        AZUL_MEDIO
+                    ),
+
+                    (
+                        "TEXTCOLOR",
+                        (0, 0),
+                        (-1, 0),
+                        BLANCO
+                    ),
+
+                    (
+                        "FONTNAME",
+                        (0, 0),
+                        (-1, 0),
+                        "Helvetica-Bold"
+                    ),
+
+                    (
+                        "ALIGN",
+                        (0, 0),
+                        (-1, 0),
+                        "CENTER"
+                    ),
+
+                    # -------------------------------------------------
+                    # CUERPO
+                    # -------------------------------------------------
+
+                    (
+                        "ROWBACKGROUNDS",
+                        (0, 1),
+                        (-1, -1),
+                        [
+                            BLANCO,
+                            GRIS_CLARO
+                        ]
+                    ),
+
+                    (
+                        "GRID",
+                        (0, 0),
+                        (-1, -1),
+                        0.35,
+                        GRIS_BORDE
+                    ),
+
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "MIDDLE"
+                    ),
+
+                    (
+                        "ALIGN",
+                        (0, 1),
+                        (1, -1),
+                        "CENTER"
+                    ),
+
+                    (
+                        "ALIGN",
+                        (3, 1),
+                        (-1, -1),
+                        "CENTER"
+                    ),
+
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5
+                    ),
+
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        5
+                    ),
+
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        6
+                    ),
+
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        6
+                    ),
+
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, 0),
+                        7
+                    ),
+
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, 0),
+                        7
+                    ),
                 ]
             )
         )
 
         elementos.append(tabla)
 
-        elementos.append(Spacer(1, 20))
+        elementos.append(Spacer(1, 7 * mm))
+
+        # =========================================================
+        # RESUMEN FINAL
+        # =========================================================
+
+        elementos.append(
+            Paragraph(
+                "Resumen del periodo",
+                seccion
+            )
+        )
+
+        porcentaje_anomalias = 0
+
+        if total_inspecciones > 0:
+            porcentaje_anomalias = (
+                total_anomalias / total_inspecciones
+            )
+
+        porcentaje_finalizadas = 0
+
+        if total_inspecciones > 0:
+            porcentaje_finalizadas = (
+                total_finalizadas / total_inspecciones
+            ) * 100
 
         resumen = [
-            ["Total inspecciones", str(len(inspecciones))],
-            ["Total anomalías", str(total_anomalias)],
+            [
+                Paragraph(
+                    "<b>Total de inspecciones</b>",
+                    texto
+                ),
+                Paragraph(
+                    str(total_inspecciones),
+                    texto_centro
+                ),
+            ],
+            [
+                Paragraph(
+                    "<b>Inspecciones finalizadas/revisadas</b>",
+                    texto
+                ),
+                Paragraph(
+                    str(total_finalizadas),
+                    texto_centro
+                ),
+            ],
+            [
+                Paragraph(
+                    "<b>Pendientes de cierre</b>",
+                    texto
+                ),
+                Paragraph(
+                    str(total_pendientes),
+                    texto_centro
+                ),
+            ],
+            [
+                Paragraph(
+                    "<b>Total de anomalías</b>",
+                    texto
+                ),
+                Paragraph(
+                    str(total_anomalias),
+                    texto_centro
+                ),
+            ],
+            [
+                Paragraph(
+                    "<b>Promedio de anomalías por inspección</b>",
+                    texto
+                ),
+                Paragraph(
+                    f"{porcentaje_anomalias:.2f}",
+                    texto_centro
+                ),
+            ],
+            [
+                Paragraph(
+                    "<b>% de inspecciones finalizadas/revisadas</b>",
+                    texto
+                ),
+                Paragraph(
+                    f"{porcentaje_finalizadas:.1f}%",
+                    texto_centro
+                ),
+            ],
         ]
 
-        tabla2 = Table(resumen, colWidths=[200, 80])
+        tabla_resumen = Table(
+            resumen,
+            colWidths=[
+                125 * mm,
+                45 * mm,
+            ],
+        )
 
-        tabla2.setStyle(
+        tabla_resumen.setStyle(
             TableStyle(
                 [
-                    ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-                    ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#1F4E78")),
-                    ("TEXTCOLOR", (0, 0), (0, -1), colors.white),
-                    ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                    (
+                        "BACKGROUND",
+                        (0, 0),
+                        (0, -1),
+                        AZUL_CLARO
+                    ),
+
+                    (
+                        "BACKGROUND",
+                        (1, 0),
+                        (1, -1),
+                        BLANCO
+                    ),
+
+                    (
+                        "GRID",
+                        (0, 0),
+                        (-1, -1),
+                        0.4,
+                        GRIS_BORDE
+                    ),
+
+                    (
+                        "VALIGN",
+                        (0, 0),
+                        (-1, -1),
+                        "MIDDLE"
+                    ),
+
+                    (
+                        "ALIGN",
+                        (1, 0),
+                        (1, -1),
+                        "CENTER"
+                    ),
+
+                    (
+                        "LEFTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        6
+                    ),
+
+                    (
+                        "RIGHTPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        6
+                    ),
+
+                    (
+                        "TOPPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        6
+                    ),
+
+                    (
+                        "BOTTOMPADDING",
+                        (0, 0),
+                        (-1, -1),
+                        6
+                    ),
                 ]
             )
         )
 
-        elementos.append(tabla2)
+        elementos.append(tabla_resumen)
 
-        doc.build(elementos)
+        # =========================================================
+        # MENSAJE CUANDO NO HAY INSPECCIONES
+        # =========================================================
+
+        if not inspecciones:
+
+            elementos.append(Spacer(1, 10 * mm))
+
+            mensaje = Table(
+                [
+                    [
+                        Paragraph(
+                            "<b>No se encontraron inspecciones "
+                            "preoperacionales para el periodo seleccionado.</b>",
+                            texto_centro
+                        )
+                    ]
+                ],
+                colWidths=[170 * mm],
+            )
+
+            mensaje.setStyle(
+                TableStyle(
+                    [
+                        (
+                            "BACKGROUND",
+                            (0, 0),
+                            (-1, -1),
+                            AZUL_CLARO
+                        ),
+                        (
+                            "BOX",
+                            (0, 0),
+                            (-1, -1),
+                            0.5,
+                            GRIS_BORDE
+                        ),
+                        (
+                            "LEFTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            10
+                        ),
+                        (
+                            "RIGHTPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            10
+                        ),
+                        (
+                            "TOPPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            12
+                        ),
+                        (
+                            "BOTTOMPADDING",
+                            (0, 0),
+                            (-1, -1),
+                            12
+                        ),
+                    ]
+                )
+            )
+
+            elementos.append(mensaje)
+
+        # =========================================================
+        # PIE DE PÁGINA
+        # =========================================================
+
+        def dibujar_footer(canvas, documento):
+
+            canvas.saveState()
+
+            ancho, alto = A4
+
+            # Línea superior
+            canvas.setStrokeColor(GRIS_BORDE)
+            canvas.setLineWidth(0.5)
+
+            canvas.line(
+                15 * mm,
+                12 * mm,
+                ancho - 15 * mm,
+                12 * mm
+            )
+
+            # Texto izquierdo
+            canvas.setFont(
+                "Helvetica",
+                7
+            )
+
+            canvas.setFillColor(
+                GRIS_MEDIO
+            )
+
+            canvas.drawString(
+                15 * mm,
+                7 * mm,
+                "IntelliFeet · Sistema de Gestión Operacional"
+            )
+
+            # Página
+            canvas.drawRightString(
+                ancho - 15 * mm,
+                7 * mm,
+                f"Página {canvas.getPageNumber()}"
+            )
+
+            canvas.restoreState()
+
+        # =========================================================
+        # GENERAR PDF
+        # =========================================================
+
+        doc.build(
+            elementos,
+            onFirstPage=dibujar_footer,
+            onLaterPages=dibujar_footer
+        )
 
         buffer.seek(0)
 
         return buffer
+
 
     @staticmethod
     def obtener_reporte_preoperacionales(
@@ -4974,9 +7750,9 @@ class InspeccionService:
                 "No existen inspecciones para el periodo especificado."
             )
 
-        # =====================================================
+        # =========================================================
         # IMPORTACIONES
-        # =====================================================
+        # =========================================================
 
         from io import BytesIO
         import os
@@ -4992,9 +7768,9 @@ class InspeccionService:
         from openpyxl.drawing.image import Image
         from openpyxl.utils import get_column_letter
 
-        # =====================================================
-        # CREACIÓN EXCEL
-        # =====================================================
+        # =========================================================
+        # WORKBOOK
+        # =========================================================
 
         wb = Workbook()
 
@@ -5003,62 +7779,98 @@ class InspeccionService:
 
         ws.sheet_view.showGridLines = False
 
-        # =====================================================
-        # COLORES
-        # =====================================================
+        # =========================================================
+        # COLORES CORPORATIVOS
+        # =========================================================
 
-        azul_oscuro = PatternFill(
+        AZUL_OSCURO = "172554"
+        AZUL = "1E40AF"
+        AZUL_MEDIO = "2563EB"
+        AZUL_CLARO = "EFF6FF"
+        AZUL_HEADER = "DBEAFE"
+
+        VERDE = "15803D"
+        VERDE_CLARO = "DCFCE7"
+
+        ROJO = "B91C1C"
+        ROJO_CLARO = "FEE2E2"
+
+        NARANJA = "C2410C"
+        NARANJA_CLARO = "FFEDD5"
+
+        GRIS_OSCURO = "334155"
+        GRIS_MEDIO = "64748B"
+        GRIS_CLARO = "F8FAFC"
+        GRIS_BORDE = "CBD5E1"
+
+        BLANCO = "FFFFFF"
+
+        # =========================================================
+        # FILLS
+        # =========================================================
+
+        fill_azul_oscuro = PatternFill(
             "solid",
-            fgColor="1F4E78"
+            fgColor=AZUL_OSCURO
         )
 
-        azul_claro = PatternFill(
+        fill_azul = PatternFill(
             "solid",
-            fgColor="D9EAF7"
+            fgColor=AZUL
         )
 
-        azul_header = PatternFill(
+        fill_azul_medio = PatternFill(
             "solid",
-            fgColor="8DB4E2"
+            fgColor=AZUL_MEDIO
         )
 
-        azul_muy_claro = PatternFill(
+        fill_azul_claro = PatternFill(
             "solid",
-            fgColor="EAF3F8"
+            fgColor=AZUL_CLARO
         )
 
-        gris = PatternFill(
+        fill_azul_header = PatternFill(
             "solid",
-            fgColor="F2F2F2"
+            fgColor=AZUL_HEADER
         )
 
-        verde = PatternFill(
+        fill_gris = PatternFill(
             "solid",
-            fgColor="C6EFCE"
+            fgColor=GRIS_CLARO
         )
 
-        rojo = PatternFill(
+        fill_blanco = PatternFill(
             "solid",
-            fgColor="FFC7CE"
+            fgColor=BLANCO
         )
 
-        amarillo = PatternFill(
+        fill_verde = PatternFill(
             "solid",
-            fgColor="FFEB9C"
+            fgColor=VERDE_CLARO
         )
 
-        blanco = PatternFill(
+        fill_rojo = PatternFill(
             "solid",
-            fgColor="FFFFFF"
+            fgColor=ROJO_CLARO
         )
 
-        # =====================================================
+        fill_naranja = PatternFill(
+            "solid",
+            fgColor=NARANJA_CLARO
+        )
+
+        # =========================================================
         # BORDES
-        # =====================================================
+        # =========================================================
 
         thin = Side(
             border_style="thin",
-            color="BFBFBF"
+            color=GRIS_BORDE
+        )
+
+        medium = Side(
+            border_style="medium",
+            color=AZUL
         )
 
         border = Border(
@@ -5068,9 +7880,16 @@ class InspeccionService:
             bottom=thin
         )
 
-        # =====================================================
+        border_seccion = Border(
+            left=medium,
+            right=medium,
+            top=medium,
+            bottom=medium
+        )
+
+        # =========================================================
         # ALINEACIONES
-        # =====================================================
+        # =========================================================
 
         center = Alignment(
             horizontal="center",
@@ -5084,100 +7903,280 @@ class InspeccionService:
             wrap_text=True
         )
 
-        # =====================================================
+        # =========================================================
         # FUENTES
-        # =====================================================
+        # =========================================================
 
-        titulo_font = Font(
+        font_titulo = Font(
+            name="Calibri",
             bold=True,
-            color="FFFFFF",
-            size=14
+            color=BLANCO,
+            size=16
         )
 
-        subtitulo_font = Font(
+        font_subtitulo = Font(
+            name="Calibri",
             bold=True,
-            color="FFFFFF",
+            color=BLANCO,
             size=11
         )
 
-        bold = Font(
+        font_seccion = Font(
+            name="Calibri",
             bold=True,
-            size=10,
-            color="1F1F1F"
+            color=BLANCO,
+            size=11
         )
 
-        normal = Font(
-            size=10,
-            color="333333"
-        )
-
-        white_bold = Font(
+        font_label = Font(
+            name="Calibri",
             bold=True,
-            size=10,
-            color="FFFFFF"
+            color=GRIS_OSCURO,
+            size=10
         )
 
-        # =====================================================
-        # ANCHO COLUMNAS
-        # =====================================================
+        font_normal = Font(
+            name="Calibri",
+            color=GRIS_OSCURO,
+            size=10
+        )
 
-        columnas = {
+        font_pequena = Font(
+            name="Calibri",
+            color=GRIS_MEDIO,
+            size=9
+        )
+
+        font_header = Font(
+            name="Calibri",
+            bold=True,
+            color=BLANCO,
+            size=10
+        )
+
+        font_indicador = Font(
+            name="Calibri",
+            bold=True,
+            color=AZUL_OSCURO,
+            size=13
+        )
+
+        font_indicador_label = Font(
+            name="Calibri",
+            bold=True,
+            color=GRIS_MEDIO,
+            size=9
+        )
+
+        # =========================================================
+        # HELPERS
+        # =========================================================
+
+        def texto_seguro(valor, defecto=""):
+            if valor is None:
+                return defecto
+
+            valor = str(valor).strip()
+
+            return valor if valor else defecto
+
+        def aplicar_borde_rango(hoja, rango):
+            for fila in hoja[rango]:
+                for celda in fila:
+                    celda.border = border
+
+        def aplicar_encabezado(
+            hoja,
+            fila,
+            columnas,
+            titulo,
+            fill=fill_azul_medio
+        ):
+
+            hoja.merge_cells(
+                start_row=fila,
+                start_column=1,
+                end_row=fila,
+                end_column=columnas
+            )
+
+            celda = hoja.cell(
+                fila,
+                1
+            )
+
+            celda.value = titulo
+            celda.fill = fill
+            celda.font = font_seccion
+            celda.alignment = center
+            celda.border = border_seccion
+
+            for col in range(1, columnas + 1):
+                hoja.cell(
+                    fila,
+                    col
+                ).border = border_seccion
+
+        def aplicar_estado(celda, estado):
+
+            estado = texto_seguro(
+                estado
+            ).upper()
+
+            if estado in (
+                "FINALIZADA",
+                "REVISADA",
+                "APROBADO",
+                "APROBADA"
+            ):
+
+                celda.fill = fill_verde
+                celda.font = Font(
+                    bold=True,
+                    color=VERDE,
+                    size=9
+                )
+
+            elif estado in (
+                "PENDIENTE_CIERRE",
+                "EN_PROCESO"
+            ):
+
+                celda.fill = fill_naranja
+                celda.font = Font(
+                    bold=True,
+                    color=NARANJA,
+                    size=9
+                )
+
+            elif estado in (
+                "ANULADA",
+                "RECHAZADO",
+                "RECHAZADA"
+            ):
+
+                celda.fill = fill_rojo
+                celda.font = Font(
+                    bold=True,
+                    color=ROJO,
+                    size=9
+                )
+
+            else:
+
+                celda.fill = fill_gris
+                celda.font = font_normal
+
+        def aplicar_respuesta(celda, valor):
+
+            valor_normalizado = (
+                texto_seguro(valor)
+                .upper()
+                .strip()
+            )
+
+            if valor_normalizado in [
+                "SI",
+                "SÍ",
+                "OK",
+                "CUMPLE",
+                "BUENO",
+                "TRUE",
+                "1"
+            ]:
+
+                celda.fill = fill_verde
+                celda.font = Font(
+                    bold=True,
+                    color=VERDE,
+                    size=10
+                )
+
+            elif valor_normalizado in [
+                "NO",
+                "NO CUMPLE",
+                "MALO",
+                "FALSE",
+                "0"
+            ]:
+
+                celda.fill = fill_rojo
+                celda.font = Font(
+                    bold=True,
+                    color=ROJO,
+                    size=10
+                )
+
+            elif valor_normalizado in [
+                "N/A",
+                "NA",
+                "NO APLICA"
+            ]:
+
+                celda.fill = fill_naranja
+                celda.font = Font(
+                    bold=True,
+                    color=NARANJA,
+                    size=10
+                )
+
+        # =========================================================
+        # CONFIGURACIÓN HOJA PRINCIPAL
+        # =========================================================
+
+        columnas_principal = {
             "A": 15,
             "B": 12,
-            "C": 28,
+            "C": 20,
             "D": 20,
             "E": 18,
             "F": 18,
             "G": 18,
-            "H": 18,
-            "I": 18,
-            "J": 15,
-            "K": 15,
-            "L": 25,
+            "H": 16,
+            "I": 16,
+            "J": 16,
+            "K": 16,
+            "L": 18,
         }
 
-        for col, ancho in columnas.items():
+        for col, ancho in columnas_principal.items():
             ws.column_dimensions[col].width = ancho
 
-        # =====================================================
-        # ALTURA FILAS
-        # =====================================================
+        ws.sheet_view.zoomScale = 90
 
-        for fila in range(1, 80):
-            ws.row_dimensions[fila].height = 28
-
-        ws.row_dimensions[1].height = 35
-        ws.row_dimensions[2].height = 30
-        ws.row_dimensions[3].height = 30
-
-        # =====================================================
+        # =========================================================
         # ENCABEZADO CORPORATIVO
-        # =====================================================
+        # =========================================================
 
-        ws.merge_cells("A1:B3")
+        ws.merge_cells("A1:B4")
 
-        for row in ws["A1:B3"]:
-            for cell in row:
-                cell.fill = azul_oscuro
-                cell.border = border
+        for fila in ws["A1:B4"]:
+            for celda in fila:
+                celda.fill = fill_azul_oscuro
+                celda.border = border_seccion
 
         ruta_logo = "static/intellifeet.png"
 
         if os.path.exists(ruta_logo):
 
-            logo = Image(ruta_logo)
+            try:
 
-            logo.width = 260
-            logo.height = 128
+                logo = Image(ruta_logo)
 
-            ws.add_image(
-                logo,
-                "A1"
-            )
+                logo.width = 235
+                logo.height = 115
 
-        # =====================================================
+                ws.add_image(
+                    logo,
+                    "A1"
+                )
+
+            except Exception:
+                pass
+
+        # =========================================================
         # TITULO
-        # =====================================================
+        # =========================================================
 
         ws.merge_cells("C1:G2")
 
@@ -5186,65 +8185,92 @@ class InspeccionService:
             "GESTIÓN DE SEGURIDAD OPERACIONAL"
         )
 
-        ws["C1"].fill = azul_oscuro
-        ws["C1"].font = titulo_font
+        ws["C1"].fill = fill_azul_oscuro
+        ws["C1"].font = font_titulo
         ws["C1"].alignment = center
-        ws["C1"].border = border
+        ws["C1"].border = border_seccion
 
-        # =====================================================
-        # NOMBRE REPORTE
-        # =====================================================
+        for fila in range(1, 3):
+            for col in range(3, 8):
+                ws.cell(
+                    fila,
+                    col
+                ).fill = fill_azul_oscuro
 
-        ws.merge_cells("C3:G3")
+        # =========================================================
+        # NOMBRE DEL REPORTE
+        # =========================================================
+
+        ws.merge_cells("C3:G4")
 
         ws["C3"] = (
             "REPORTE DE INSPECCIONES PREOPERACIONALES"
         )
 
-        ws["C3"].fill = azul_claro
+        ws["C3"].fill = fill_azul_claro
         ws["C3"].font = Font(
             bold=True,
-            size=12,
-            color="1F1F1F"
+            color=AZUL_OSCURO,
+            size=12
         )
-
         ws["C3"].alignment = center
-        ws["C3"].border = border
+        ws["C3"].border = border_seccion
 
-        # =====================================================
-        # INFORMACIÓN DOCUMENTO
-        # =====================================================
+        # =========================================================
+        # INFORMACIÓN DOCUMENTAL
+        # =========================================================
 
-        info_documento = [
-            ("H1:I1", "VERSIÓN: 001"),
-            ("H2:I2", "CÓDIGO: PRE-R-001"),
-            ("H3:I3", "PÁGINA: 1 DE 1"),
+        documentos = [
+            ("H1:I1", "VERSIÓN", "001"),
+            ("J1:L1", "CÓDIGO", "PRE-R-001"),
+            ("H2:I2", "PERIODO", f"{mes:02d}/{anio}"),
+            ("J2:L2", "SISTEMA", "INTELLIFEET"),
+            ("H3:I4", "TIPO", "PREOPERACIONAL"),
+            ("J3:L4", "GENERADO", "REPORTE"),
         ]
 
-        for rango, texto in info_documento:
+        for rango, etiqueta, valor in documentos:
 
             ws.merge_cells(rango)
 
-            celda = rango.split(":")[0]
+            inicio = rango.split(":")[0]
 
-            ws[celda] = texto
-            ws[celda].fill = azul_oscuro
-            ws[celda].font = white_bold
-            ws[celda].alignment = center
-            ws[celda].border = border
+            ws[inicio] = (
+                f"{etiqueta}\n{valor}"
+            )
 
-        # =====================================================
+            ws[inicio].fill = fill_azul_oscuro
+            ws[inicio].font = Font(
+                bold=True,
+                color=BLANCO,
+                size=9
+            )
+            ws[inicio].alignment = center
+
+            aplicar_borde_rango(
+                ws,
+                rango
+            )
+
+        # =========================================================
+        # ALTURA ENCABEZADO
+        # =========================================================
+
+        ws.row_dimensions[1].height = 30
+        ws.row_dimensions[2].height = 30
+        ws.row_dimensions[3].height = 28
+        ws.row_dimensions[4].height = 28
+
+        # =========================================================
         # INFORMACIÓN GENERAL
-        # =====================================================
+        # =========================================================
 
-        ws.merge_cells("A5:L5")
-
-        ws["A5"] = "INFORMACIÓN GENERAL DEL ACTIVO"
-
-        ws["A5"].fill = azul_oscuro
-        ws["A5"].font = subtitulo_font
-        ws["A5"].alignment = center
-        ws["A5"].border = border
+        aplicar_encabezado(
+            ws,
+            6,
+            12,
+            "INFORMACIÓN GENERAL DEL ACTIVO"
+        )
 
         primera = inspecciones[0]
 
@@ -5256,9 +8282,9 @@ class InspeccionService:
 
         operador = primera.usuario
 
-        # =====================================================
+        # =========================================================
         # TIPO ACTIVO
-        # =====================================================
+        # =========================================================
 
         if primera.vehiculo:
 
@@ -5267,12 +8293,13 @@ class InspeccionService:
             tipo_vehiculo = ""
 
             if primera.vehiculo.tipo_vehiculo:
-                tipo_vehiculo = (
+
+                tipo_vehiculo = texto_seguro(
                     primera.vehiculo.tipo_vehiculo.nombre
                 )
 
-            identificador = (
-                primera.vehiculo.placa or ""
+            identificador = texto_seguro(
+                primera.vehiculo.placa
             )
 
         else:
@@ -5281,28 +8308,38 @@ class InspeccionService:
 
             tipo_vehiculo = ""
 
-            if primera.maquinaria.tipo_maquinaria:
-                tipo_vehiculo = (
+            if (
+                primera.maquinaria
+                and primera.maquinaria.tipo_maquinaria
+            ):
+
+                tipo_vehiculo = texto_seguro(
                     primera.maquinaria.tipo_maquinaria.nombre
                 )
 
-            identificador = (
-                primera.maquinaria.codigo or ""
+            identificador = texto_seguro(
+                primera.maquinaria.codigo
+                if primera.maquinaria
+                else ""
             )
 
-        marca = getattr(
-            activo,
-            "marca",
-            ""
-        ) or ""
+        marca = texto_seguro(
+            getattr(
+                activo,
+                "marca",
+                ""
+            )
+        )
 
-        modelo = getattr(
-            activo,
-            "modelo",
-            ""
-        ) or ""
+        modelo = texto_seguro(
+            getattr(
+                activo,
+                "modelo",
+                ""
+            )
+        )
 
-        nombre_operador = (
+        nombre_operador = texto_seguro(
             operador.nombre
             if operador
             else ""
@@ -5310,7 +8347,10 @@ class InspeccionService:
 
         datos_vehiculo = [
 
-            ("TIPO DE ACTIVO", tipo_activo),
+            (
+                "TIPO DE ACTIVO",
+                tipo_activo
+            ),
 
             (
                 "CLASE / TIPO",
@@ -5319,22 +8359,22 @@ class InspeccionService:
 
             (
                 "PLACA / CÓDIGO",
-                str(identificador)
+                identificador
             ),
 
             (
                 "MARCA",
-                str(marca)
+                marca
             ),
 
             (
                 "MODELO",
-                str(modelo)
+                modelo
             ),
 
             (
                 "OPERADOR",
-                str(nombre_operador)
+                nombre_operador
             ),
 
             (
@@ -5345,22 +8385,23 @@ class InspeccionService:
 
         posiciones = [
 
-            ("A7:B7", "C7:E7"),
+            ("A8:B8", "C8:E8"),
+            ("F8:G8", "H8:L8"),
 
-            ("F7:G7", "H7:L7"),
+            ("A10:B10", "C10:E10"),
+            ("F10:G10", "H10:L10"),
 
-            ("A9:B9", "C9:E9"),
+            ("A12:B12", "C12:E12"),
+            ("F12:G12", "H12:L12"),
 
-            ("F9:G9", "H9:L9"),
-
-            ("A11:B11", "C11:E11"),
-
-            ("F11:G11", "H11:L11"),
+            ("A13:B13", "C13:E13"),
 
         ]
 
-        # Solo utilizamos las primeras 6 posiciones
         for i, posicion in enumerate(posiciones):
+
+            if i >= len(datos_vehiculo):
+                break
 
             etiqueta = datos_vehiculo[i][0]
             valor = datos_vehiculo[i][1]
@@ -5368,37 +8409,45 @@ class InspeccionService:
             label_pos = posicion[0]
             value_pos = posicion[1]
 
-            # -------------------------
-            # ETIQUETA
-            # -------------------------
+            # -----------------------------------------------------
+            # LABEL
+            # -----------------------------------------------------
 
             ws.merge_cells(label_pos)
 
             celda = label_pos.split(":")[0]
 
             ws[celda] = etiqueta
-            ws[celda].fill = azul_claro
-            ws[celda].font = bold
+            ws[celda].fill = fill_azul_claro
+            ws[celda].font = font_label
             ws[celda].alignment = center
-            ws[celda].border = border
 
-            # -------------------------
+            aplicar_borde_rango(
+                ws,
+                label_pos
+            )
+
+            # -----------------------------------------------------
             # VALOR
-            # -------------------------
+            # -----------------------------------------------------
 
             ws.merge_cells(value_pos)
 
             celda_valor = value_pos.split(":")[0]
 
             ws[celda_valor] = valor
-            ws[celda_valor].fill = gris
-            ws[celda_valor].font = normal
+            ws[celda_valor].fill = fill_blanco
+            ws[celda_valor].font = font_normal
             ws[celda_valor].alignment = center
-            ws[celda_valor].border = border
 
-        # =====================================================
+            aplicar_borde_rango(
+                ws,
+                value_pos
+            )
+
+        # =========================================================
         # RESUMEN ESTADÍSTICO
-        # =====================================================
+        # =========================================================
 
         total_inspecciones = len(
             inspecciones
@@ -5409,17 +8458,41 @@ class InspeccionService:
             for i in inspecciones
         )
 
-        aprobadas = len([
+        finalizadas = len([
             i
             for i in inspecciones
-            if (i.estado or "").upper()
-            in ["APROBADO", "APROBADA"]
+            if (
+                texto_seguro(
+                    i.estado
+                ).upper()
+                in [
+                    "FINALIZADA",
+                    "REVISADA"
+                ]
+            )
         ])
 
-        rechazadas = (
-            total_inspecciones
-            - aprobadas
-        )
+        pendientes = len([
+            i
+            for i in inspecciones
+            if (
+                texto_seguro(
+                    i.estado
+                ).upper()
+                == "PENDIENTE_CIERRE"
+            )
+        ])
+
+        anuladas = len([
+            i
+            for i in inspecciones
+            if (
+                texto_seguro(
+                    i.estado
+                ).upper()
+                == "ANULADA"
+            )
+        ])
 
         cumplimiento = 0
 
@@ -5427,105 +8500,184 @@ class InspeccionService:
 
             cumplimiento = round(
                 (
-                    aprobadas
+                    finalizadas
                     / total_inspecciones
                 ) * 100,
                 2
             )
 
-        ws.merge_cells("A14:L14")
-
-        ws["A14"] = (
+        aplicar_encabezado(
+            ws,
+            15,
+            12,
             "RESUMEN ESTADÍSTICO DEL PERIODO"
         )
-
-        ws["A14"].fill = azul_oscuro
-        ws["A14"].font = subtitulo_font
-        ws["A14"].alignment = center
-        ws["A14"].border = border
 
         indicadores = [
 
             (
                 "TOTAL INSPECCIONES",
-                total_inspecciones
+                total_inspecciones,
+                fill_azul_claro
             ),
 
             (
-                "APROBADAS",
-                aprobadas
+                "FINALIZADAS / REVISADAS",
+                finalizadas,
+                fill_verde
             ),
 
             (
-                "RECHAZADAS",
-                rechazadas
+                "PENDIENTES DE CIERRE",
+                pendientes,
+                fill_naranja
             ),
 
             (
                 "ANOMALÍAS",
-                total_anomalias
+                total_anomalias,
+                fill_rojo
+            ),
+
+            (
+                "ANULADAS",
+                anuladas,
+                fill_gris
             ),
 
             (
                 "CUMPLIMIENTO",
-                f"{cumplimiento}%"
+                f"{cumplimiento}%",
+                fill_azul_claro
             ),
-
         ]
 
-        columnas_indicador = [
+        posiciones_indicadores = [
 
-            ("A15:B16"),
-            ("C15:D16"),
-            ("E15:F16"),
-            ("G15:H16"),
-            ("I15:L16"),
-
+            ("A17:B19"),
+            ("C17:D19"),
+            ("E17:F19"),
+            ("G17:H19"),
+            ("I17:J19"),
+            ("K17:L19"),
         ]
 
         for index, rango in enumerate(
-            columnas_indicador
+            posiciones_indicadores
         ):
 
             ws.merge_cells(rango)
 
             celda = rango.split(":")[0]
 
+            etiqueta = indicadores[index][0]
+            valor = indicadores[index][1]
+            fill = indicadores[index][2]
+
             ws[celda] = (
-                indicadores[index][0]
-                + "\n\n"
-                + str(indicadores[index][1])
+                f"{etiqueta}\n\n"
+                f"{valor}"
             )
 
-            ws[celda].fill = azul_claro
-            ws[celda].font = Font(
-                bold=True,
-                size=11
-            )
-
+            ws[celda].fill = fill
+            ws[celda].font = font_indicador
             ws[celda].alignment = center
-            ws[celda].border = border
 
-        # =====================================================
-        # HISTORIAL
-        # =====================================================
+            aplicar_borde_rango(
+                ws,
+                rango
+            )
+
+        ws.row_dimensions[17].height = 24
+        ws.row_dimensions[18].height = 24
+        ws.row_dimensions[19].height = 24
+
+        # =========================================================
+        # INFORMACIÓN DE FILTRO
+        # =========================================================
+
+        aplicar_encabezado(
+            ws,
+            21,
+            12,
+            "FILTROS APLICADOS"
+        )
+
+        filtro = "TODOS LOS ACTIVOS"
+
+        if vehiculo_id:
+            filtro = "VEHÍCULO SELECCIONADO"
+
+        elif maquinaria_id:
+            filtro = "MAQUINARIA SELECCIONADA"
+
+        ws.merge_cells("A23:L23")
+
+        ws["A23"] = (
+            f"Periodo: {mes:02d}/{anio}   |   "
+            f"Filtro: {filtro}"
+        )
+
+        ws["A23"].fill = fill_gris
+        ws["A23"].font = font_normal
+        ws["A23"].alignment = center
+
+        aplicar_borde_rango(
+            ws,
+            "A23:L23"
+        )
+
+        # =========================================================
+        # CONFIGURACIÓN IMPRESIÓN
+        # =========================================================
+
+        ws.freeze_panes = "A6"
+
+        ws.print_title_rows = "1:4"
+
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+        ws.page_margins.left = 0.25
+        ws.page_margins.right = 0.25
+        ws.page_margins.top = 0.40
+        ws.page_margins.bottom = 0.40
+
+        ws.oddFooter.center.text = (
+            "IntelliFeet · Sistema de Gestión Operacional"
+        )
+
+        ws.oddFooter.right.text = (
+            "Página &P de &N"
+        )
+
+        # =========================================================
+        # HOJA HISTORIAL
+        # =========================================================
 
         historial = wb.create_sheet(
             "Historial"
         )
 
         historial.sheet_view.showGridLines = False
+        historial.sheet_view.zoomScale = 90
 
         columnas_historial = {
 
             "A": 15,
             "B": 10,
-            "C": 18,
-            "D": 12,
-            "E": 25,
-            "F": 45,
+            "C": 20,
+            "D": 13,
+            "E": 28,
+            "F": 48,
             "G": 18,
             "H": 18,
+            "I": 18,
 
         }
 
@@ -5535,16 +8687,54 @@ class InspeccionService:
                 col
             ].width = ancho
 
-        historial.merge_cells("A1:H1")
+        # =========================================================
+        # TITULO
+        # =========================================================
+
+        historial.merge_cells("A1:I1")
 
         historial["A1"] = (
             "HISTORIAL DE INSPECCIONES PREOPERACIONALES"
         )
 
-        historial["A1"].fill = azul_oscuro
-        historial["A1"].font = titulo_font
+        historial["A1"].fill = fill_azul_oscuro
+        historial["A1"].font = font_titulo
         historial["A1"].alignment = center
-        historial["A1"].border = border
+
+        aplicar_borde_rango(
+            historial,
+            "A1:I1"
+        )
+
+        historial.row_dimensions[1].height = 35
+
+        # =========================================================
+        # SUBTITULO
+        # =========================================================
+
+        historial.merge_cells("A2:I2")
+
+        historial["A2"] = (
+            f"Periodo consultado: {mes:02d}/{anio}"
+        )
+
+        historial["A2"].fill = fill_azul_claro
+        historial["A2"].font = Font(
+            bold=True,
+            color=AZUL_OSCURO,
+            size=10
+        )
+
+        historial["A2"].alignment = center
+
+        aplicar_borde_rango(
+            historial,
+            "A2:I2"
+        )
+
+        # =========================================================
+        # HEADERS
+        # =========================================================
 
         headers_historial = [
 
@@ -5556,6 +8746,7 @@ class InspeccionService:
             "OBSERVACIÓN GENERAL",
             "LECTURA INICIAL",
             "LECTURA FINAL",
+            "DIFERENCIA",
 
         ]
 
@@ -5565,37 +8756,50 @@ class InspeccionService:
         ):
 
             celda = historial.cell(
-                3,
+                4,
                 col
             )
 
             celda.value = titulo_col
-            celda.fill = azul_header
-            celda.font = bold
+            celda.fill = fill_azul_medio
+            celda.font = font_header
             celda.alignment = center
             celda.border = border
 
-        fila = 4
+        # =========================================================
+        # DATOS HISTORIAL
+        # =========================================================
+
+        fila = 5
 
         for inspeccion in inspecciones:
+
+            fecha_inicio = inspeccion.hora_inicio
 
             historial.cell(
                 fila,
                 1
-            ).value = inspeccion.hora_inicio.strftime(
-                "%d/%m/%Y"
+            ).value = (
+                fecha_inicio.strftime(
+                    "%d/%m/%Y"
+                )
+                if fecha_inicio
+                else ""
             )
 
             historial.cell(
                 fila,
                 2
-            ).value = inspeccion.hora_inicio.strftime(
-                "%H:%M"
+            ).value = (
+                fecha_inicio.strftime(
+                    "%H:%M"
+                )
+                if fecha_inicio
+                else ""
             )
 
-            estado = (
+            estado = texto_seguro(
                 inspeccion.estado
-                or ""
             )
 
             celda_estado = historial.cell(
@@ -5604,24 +8808,10 @@ class InspeccionService:
             )
 
             celda_estado.value = estado
-
-            if estado.upper() in [
-                "APROBADO",
-                "APROBADA"
-            ]:
-
-                celda_estado.fill = verde
-
-            elif estado.upper() in [
-                "FINALIZADA",
-                "REVISADA"
-            ]:
-
-                celda_estado.fill = amarillo
-
-            else:
-
-                celda_estado.fill = rojo
+            aplicar_estado(
+                celda_estado,
+                estado
+            )
 
             historial.cell(
                 fila,
@@ -5647,27 +8837,55 @@ class InspeccionService:
                 or ""
             )
 
+            lectura_inicial = (
+                float(
+                    inspeccion.contador_inicial
+                )
+                if inspeccion.contador_inicial
+                is not None
+                else None
+            )
+
+            lectura_final = (
+                float(
+                    inspeccion.contador_final
+                )
+                if inspeccion.contador_final
+                is not None
+                else None
+            )
+
             historial.cell(
                 fila,
                 7
-            ).value = (
-                float(inspeccion.contador_inicial)
-                if inspeccion.contador_inicial is not None
-                else ""
-            )
+            ).value = lectura_inicial
 
             historial.cell(
                 fila,
                 8
-            ).value = (
-                float(inspeccion.contador_final)
-                if inspeccion.contador_final is not None
-                else ""
-            )
+            ).value = lectura_final
+
+            if (
+                lectura_inicial is not None
+                and lectura_final is not None
+            ):
+
+                historial.cell(
+                    fila,
+                    9
+                ).value = round(
+                    lectura_final
+                    - lectura_inicial,
+                    2
+                )
+
+            # -----------------------------------------------------
+            # ESTILOS
+            # -----------------------------------------------------
 
             for col in range(
                 1,
-                9
+                10
             ):
 
                 celda = historial.cell(
@@ -5676,20 +8894,92 @@ class InspeccionService:
                 )
 
                 celda.border = border
-                celda.alignment = center
-                celda.font = normal
+
+                if col in [
+                    1,
+                    2,
+                    3,
+                    4,
+                    7,
+                    8,
+                    9
+                ]:
+
+                    celda.alignment = center
+
+                else:
+
+                    celda.alignment = left
+
+                if col != 3:
+
+                    if fila % 2 == 0:
+                        celda.fill = fill_gris
+                    else:
+                        celda.fill = fill_blanco
+
+                    celda.font = font_normal
+
+            # -----------------------------------------------------
+            # ANOMALÍAS
+            # -----------------------------------------------------
+
+            celda_anomalias = historial.cell(
+                fila,
+                4
+            )
+
+            if len(inspeccion.anomalias) > 0:
+
+                celda_anomalias.fill = fill_rojo
+                celda_anomalias.font = Font(
+                    bold=True,
+                    color=ROJO,
+                    size=10
+                )
+
+            else:
+
+                celda_anomalias.fill = fill_verde
+                celda_anomalias.font = Font(
+                    bold=True,
+                    color=VERDE,
+                    size=10
+                )
 
             fila += 1
 
-        historial.freeze_panes = "A4"
+        historial.freeze_panes = "A5"
 
-        historial.auto_filter.ref = (
-            historial.dimensions
+        if fila > 5:
+
+            historial.auto_filter.ref = (
+                f"A4:I{fila - 1}"
+            )
+
+        historial.print_title_rows = "1:4"
+
+        historial.page_setup.orientation = "landscape"
+        historial.page_setup.paperSize = (
+            historial.PAPERSIZE_A4
         )
 
-        # =====================================================
-        # DETALLE DE CADA INSPECCIÓN
-        # =====================================================
+        historial.page_setup.fitToWidth = 1
+        historial.page_setup.fitToHeight = 0
+
+        historial.sheet_properties.pageSetUpPr.fitToPage = True
+
+        historial.oddFooter.center.text = (
+            "IntelliFeet · Historial de inspecciones"
+        )
+
+        historial.oddFooter.right.text = (
+            "Página &P de &N"
+        )
+
+        # =========================================================
+        # HOJAS INDIVIDUALES
+        # =========================================================
 
         for indice, inspeccion in enumerate(
             inspecciones,
@@ -5705,18 +8995,19 @@ class InspeccionService:
             )
 
             hoja.sheet_view.showGridLines = False
+            hoja.sheet_view.zoomScale = 90
 
-            # =================================================
+            # =====================================================
             # COLUMNAS
-            # =================================================
+            # =====================================================
 
             columnas_detalle = {
 
-                "A": 25,
-                "B": 45,
-                "C": 18,
-                "D": 40,
-                "E": 28,
+                "A": 24,
+                "B": 43,
+                "C": 17,
+                "D": 42,
+                "E": 30,
 
             }
 
@@ -5726,36 +9017,48 @@ class InspeccionService:
                     col
                 ].width = ancho
 
-            # =================================================
+            # =====================================================
             # TITULO
-            # =================================================
+            # =====================================================
 
-            hoja.merge_cells("A1:E1")
+            hoja.merge_cells("A1:E2")
 
             hoja["A1"] = (
-                f"DETALLE INSPECCIÓN #{indice}"
+                f"DETALLE DE INSPECCIÓN #{indice}"
             )
 
-            hoja["A1"].fill = azul_oscuro
-            hoja["A1"].font = titulo_font
+            hoja["A1"].fill = fill_azul_oscuro
+            hoja["A1"].font = font_titulo
             hoja["A1"].alignment = center
-            hoja["A1"].border = border
 
-            # =================================================
+            aplicar_borde_rango(
+                hoja,
+                "A1:E2"
+            )
+
+            # =====================================================
             # INFORMACIÓN
-            # =================================================
+            # =====================================================
 
             if inspeccion.vehiculo:
 
-                identificador = (
+                identificador = texto_seguro(
                     inspeccion.vehiculo.placa
                 )
 
                 tipo_activo = "VEHÍCULO"
 
+                tipo_nombre = ""
+
+                if inspeccion.vehiculo.tipo_vehiculo:
+
+                    tipo_nombre = texto_seguro(
+                        inspeccion.vehiculo.tipo_vehiculo.nombre
+                    )
+
             else:
 
-                identificador = (
+                identificador = texto_seguro(
                     inspeccion.maquinaria.codigo
                     if inspeccion.maquinaria
                     else ""
@@ -5763,23 +9066,45 @@ class InspeccionService:
 
                 tipo_activo = "MAQUINARIA"
 
+                tipo_nombre = ""
+
+                if (
+                    inspeccion.maquinaria
+                    and inspeccion.maquinaria.tipo_maquinaria
+                ):
+
+                    tipo_nombre = texto_seguro(
+                        inspeccion.maquinaria.tipo_maquinaria.nombre
+                    )
+
             datos = [
 
                 (
                     "FECHA",
-                    inspeccion.hora_inicio.strftime(
-                        "%d/%m/%Y %H:%M"
+                    (
+                        inspeccion.hora_inicio.strftime(
+                            "%d/%m/%Y %H:%M"
+                        )
+                        if inspeccion.hora_inicio
+                        else ""
                     )
                 ),
 
                 (
                     "ESTADO",
-                    inspeccion.estado
+                    texto_seguro(
+                        inspeccion.estado
+                    )
                 ),
 
                 (
-                    "TIPO ACTIVO",
+                    "TIPO DE ACTIVO",
                     tipo_activo
+                ),
+
+                (
+                    "CLASE / TIPO",
+                    tipo_nombre
                 ),
 
                 (
@@ -5822,59 +9147,91 @@ class InspeccionService:
 
             ]
 
-            fila = 3
+            fila = 4
 
             for campo, valor in datos:
 
-                hoja[f"A{fila}"] = campo
-                hoja[f"B{fila}"] = valor
+                hoja.cell(
+                    fila,
+                    1
+                ).value = campo
 
-                hoja[f"A{fila}"].fill = azul_claro
-                hoja[f"A{fila}"].font = bold
-                hoja[f"A{fila}"].border = border
+                hoja.cell(
+                    fila,
+                    1
+                ).fill = fill_azul_claro
 
-                hoja[f"B{fila}"].border = border
-                hoja[f"B{fila}"].alignment = left
+                hoja.cell(
+                    fila,
+                    1
+                ).font = font_label
+
+                hoja.cell(
+                    fila,
+                    1
+                ).alignment = center
+
+                hoja.cell(
+                    fila,
+                    1
+                ).border = border
+
+                hoja.merge_cells(
+                    start_row=fila,
+                    start_column=2,
+                    end_row=fila,
+                    end_column=5
+                )
+
+                hoja.cell(
+                    fila,
+                    2
+                ).value = valor
+
+                hoja.cell(
+                    fila,
+                    2
+                ).fill = fill_blanco
+
+                hoja.cell(
+                    fila,
+                    2
+                ).font = font_normal
+
+                hoja.cell(
+                    fila,
+                    2
+                ).alignment = left
+
+                aplicar_borde_rango(
+                    hoja,
+                    f"B{fila}:E{fila}"
+                )
+
+                if campo == "ESTADO":
+
+                    aplicar_estado(
+                        hoja.cell(
+                            fila,
+                            2
+                        ),
+                        valor
+                    )
 
                 fila += 1
 
-            # =================================================
+            # =====================================================
             # OBSERVACIONES GENERALES
-            # =================================================
+            # =====================================================
 
             fila += 1
 
-            hoja.merge_cells(
-                start_row=fila,
-                start_column=1,
-                end_row=fila,
-                end_column=5
+            aplicar_encabezado(
+                hoja,
+                fila,
+                5,
+                "OBSERVACIONES GENERALES"
             )
-
-            hoja.cell(
-                fila,
-                1
-            ).value = "OBSERVACIONES GENERALES"
-
-            hoja.cell(
-                fila,
-                1
-            ).fill = azul_header
-
-            hoja.cell(
-                fila,
-                1
-            ).font = bold
-
-            hoja.cell(
-                fila,
-                1
-            ).alignment = center
-
-            hoja.cell(
-                fila,
-                1
-            ).border = border
 
             fila += 1
 
@@ -5890,29 +9247,47 @@ class InspeccionService:
                 1
             ).value = (
                 inspeccion.observaciones_generales
-                or ""
+                or "Sin observaciones generales."
             )
 
             hoja.cell(
                 fila,
                 1
-            ).alignment = left
+            ).alignment = Alignment(
+                horizontal="left",
+                vertical="top",
+                wrap_text=True
+            )
 
             hoja.cell(
                 fila,
                 1
-            ).border = border
+            ).font = font_normal
+
+            aplicar_borde_rango(
+                hoja,
+                f"A{fila}:E{fila + 2}"
+            )
 
             fila += 4
 
-            # =================================================
+            # =====================================================
             # RESPUESTAS
-            # =================================================
+            # =====================================================
+
+            aplicar_encabezado(
+                hoja,
+                fila,
+                5,
+                "RESULTADO DE LA INSPECCIÓN"
+            )
+
+            fila += 1
 
             headers = [
 
                 "CATEGORÍA",
-                "PREGUNTA",
+                "PREGUNTA / ÍTEM",
                 "RESPUESTA",
                 "OBSERVACIÓN",
                 "EVIDENCIA FOTOGRÁFICA",
@@ -5930,16 +9305,16 @@ class InspeccionService:
                 )
 
                 celda.value = titulo_col
-                celda.fill = azul_header
-                celda.font = bold
+                celda.fill = fill_azul_medio
+                celda.font = font_header
                 celda.alignment = center
                 celda.border = border
 
             fila += 1
 
-            # =================================================
-            # ORDENAR RESPUESTAS
-            # =================================================
+            # =====================================================
+            # RESPUESTAS ORDENADAS
+            # =====================================================
 
             respuestas_ordenadas = sorted(
 
@@ -5971,10 +9346,6 @@ class InspeccionService:
 
             )
 
-            # =================================================
-            # RESPUESTAS
-            # =================================================
-
             for respuesta in respuestas_ordenadas:
 
                 item = respuesta.item
@@ -5982,36 +9353,34 @@ class InspeccionService:
                 if not item:
                     continue
 
-                categoria = (
-                    item.categoria
-                    if item.categoria
-                    else None
+                categoria = getattr(
+                    item,
+                    "categoria",
+                    None
                 )
 
-                nombre_categoria = (
+                nombre_categoria = texto_seguro(
                     categoria.nombre
                     if categoria
                     else ""
                 )
 
-                pregunta = (
+                pregunta = texto_seguro(
                     item.descripcion
-                    or ""
                 )
 
-                valor = (
+                valor = texto_seguro(
                     respuesta.valor
-                    or ""
                 )
 
-                observacion = (
-                    respuesta.observacion
-                    or ""
+                observacion = texto_seguro(
+                    respuesta.observacion,
+                    "Sin observación."
                 )
 
-                # ---------------------------------------------
-                # ESCRIBIR DATOS
-                # ---------------------------------------------
+                # -------------------------------------------------
+                # DATOS
+                # -------------------------------------------------
 
                 hoja.cell(
                     fila,
@@ -6033,9 +9402,9 @@ class InspeccionService:
                     4
                 ).value = observacion
 
-                # ---------------------------------------------
-                # ESTILO RESPUESTA
-                # ---------------------------------------------
+                # -------------------------------------------------
+                # ESTILOS
+                # -------------------------------------------------
 
                 for col in range(
                     1,
@@ -6048,65 +9417,34 @@ class InspeccionService:
                     )
 
                     celda.border = border
-                    celda.alignment = left
 
-                hoja.cell(
-                    fila,
-                    3
-                ).alignment = center
+                    if col == 3:
+                        celda.alignment = center
+                    else:
+                        celda.alignment = left
 
-                # ---------------------------------------------
+                    if fila % 2 == 0:
+                        celda.fill = fill_gris
+                    else:
+                        celda.fill = fill_blanco
+
+                    celda.font = font_normal
+
+                # -------------------------------------------------
                 # COLOR RESPUESTA
-                # ---------------------------------------------
+                # -------------------------------------------------
 
-                valor_normalizado = (
-                    str(valor)
-                    .strip()
-                    .upper()
+                aplicar_respuesta(
+                    hoja.cell(
+                        fila,
+                        3
+                    ),
+                    valor
                 )
 
-                if valor_normalizado in [
-                    "SI",
-                    "SÍ",
-                    "OK",
-                    "CUMPLE",
-                    "BUENO",
-                    "1",
-                    "TRUE"
-                ]:
-
-                    hoja.cell(
-                        fila,
-                        3
-                    ).fill = verde
-
-                elif valor_normalizado in [
-                    "NO",
-                    "NO CUMPLE",
-                    "MALO",
-                    "0",
-                    "FALSE"
-                ]:
-
-                    hoja.cell(
-                        fila,
-                        3
-                    ).fill = rojo
-
-                elif valor_normalizado in [
-                    "N/A",
-                    "NA",
-                    "NO APLICA"
-                ]:
-
-                    hoja.cell(
-                        fila,
-                        3
-                    ).fill = amarillo
-
-                # =================================================
+                # -------------------------------------------------
                 # FOTOS
-                # =================================================
+                # -------------------------------------------------
 
                 fotos = (
                     respuesta.fotos
@@ -6114,116 +9452,116 @@ class InspeccionService:
                     else []
                 )
 
-                if fotos:
+                fotos_validas = []
 
-                    nombres_fotos = []
+                for foto in fotos[:3]:
 
-                    for foto in fotos:
+                    archivo = texto_seguro(
+                        foto.archivo
+                        if foto
+                        else ""
+                    )
 
-                        archivo = (
-                            foto.archivo
-                            or ""
+                    if not archivo:
+                        continue
+
+                    posibles_rutas = [
+
+                        archivo,
+
+                        os.path.join(
+                            "uploads",
+                            archivo
+                        ),
+
+                        os.path.join(
+                            "static",
+                            archivo
+                        ),
+
+                    ]
+
+                    ruta_foto = None
+
+                    for ruta in posibles_rutas:
+
+                        if os.path.exists(ruta):
+
+                            ruta_foto = ruta
+                            break
+
+                    if ruta_foto:
+
+                        fotos_validas.append(
+                            ruta_foto
                         )
 
-                        if not archivo:
-                            continue
+                if fotos_validas:
 
-                        # -------------------------------------
-                        # BUSCAR ARCHIVO
-                        # -------------------------------------
+                    try:
 
-                        posibles_rutas = [
+                        # -------------------------------------------------
+                        # INSERTAR PRIMERA FOTO
+                        # -------------------------------------------------
 
-                            archivo,
+                        imagen = Image(
+                            fotos_validas[0]
+                        )
 
-                            os.path.join(
-                                "uploads",
-                                archivo
-                            ),
+                        imagen.width = 145
+                        imagen.height = 105
 
-                            os.path.join(
-                                "static",
-                                archivo
-                            ),
+                        hoja.add_image(
+                            imagen,
+                            f"E{fila}"
+                        )
 
-                        ]
+                        hoja.row_dimensions[
+                            fila
+                        ].height = 85
 
-                        ruta_foto = None
+                        # -------------------------------------------------
+                        # INFORMACIÓN DE FOTOS ADICIONALES
+                        # -------------------------------------------------
 
-                        for ruta in posibles_rutas:
+                        if len(fotos_validas) > 1:
 
-                            if os.path.exists(ruta):
-
-                                ruta_foto = ruta
-                                break
-
-                        # -------------------------------------
-                        # INSERTAR FOTO
-                        # -------------------------------------
-
-                        if ruta_foto:
-
-                            try:
-
-                                imagen = Image(
-                                    ruta_foto
-                                )
-
-                                # Tamaño de miniatura
-                                imagen.width = 150
-                                imagen.height = 110
-
-                                hoja.add_image(
-                                    imagen,
-                                    f"E{fila}"
-                                )
-
-                                # Si hay varias imágenes,
-                                # se colocan debajo
-                                # aumentando la altura.
-
-                                hoja.row_dimensions[
-                                    fila
-                                ].height = 90
-
-                            except Exception as error:
-
-                                nombres_fotos.append(
-                                    f"Error imagen: {error}"
-                                )
-
-                        else:
-
-                            nombres_fotos.append(
-                                os.path.basename(
-                                    archivo
-                                )
+                            hoja.cell(
+                                fila,
+                                5
+                            ).comment = (
+                                f"Esta respuesta contiene "
+                                f"{len(fotos_validas)} evidencias "
+                                f"fotográficas."
                             )
 
-                    # -----------------------------------------
-                    # SI NO SE PUDO INSERTAR
-                    # -----------------------------------------
-
-                    if nombres_fotos:
+                    except Exception:
 
                         hoja.cell(
                             fila,
                             5
-                        ).value = "\n".join(
-                            nombres_fotos
+                        ).value = (
+                            "Evidencia fotográfica"
                         )
 
                         hoja.cell(
                             fila,
                             5
-                        ).alignment = left
+                        ).alignment = center
 
                 else:
 
                     hoja.cell(
                         fila,
                         5
-                    ).value = "SIN EVIDENCIA"
+                    ).value = (
+                        "SIN EVIDENCIA"
+                    )
+
+                    hoja.cell(
+                        fila,
+                        5
+                    ).font = font_pequena
 
                     hoja.cell(
                         fila,
@@ -6232,45 +9570,21 @@ class InspeccionService:
 
                 fila += 1
 
-            # =================================================
+            # =====================================================
             # ANOMALÍAS
-            # =================================================
+            # =====================================================
 
             if inspeccion.anomalias:
 
                 fila += 2
 
-                hoja.merge_cells(
-                    start_row=fila,
-                    start_column=1,
-                    end_row=fila,
-                    end_column=5
+                aplicar_encabezado(
+                    hoja,
+                    fila,
+                    5,
+                    "ANOMALÍAS REPORTADAS",
+                    fill=fill_rojo
                 )
-
-                hoja.cell(
-                    fila,
-                    1
-                ).value = "ANOMALÍAS REPORTADAS"
-
-                hoja.cell(
-                    fila,
-                    1
-                ).fill = rojo
-
-                hoja.cell(
-                    fila,
-                    1
-                ).font = bold
-
-                hoja.cell(
-                    fila,
-                    1
-                ).alignment = center
-
-                hoja.cell(
-                    fila,
-                    1
-                ).border = border
 
                 fila += 1
 
@@ -6295,8 +9609,8 @@ class InspeccionService:
                     )
 
                     celda.value = titulo_col
-                    celda.fill = azul_header
-                    celda.font = bold
+                    celda.fill = fill_azul_medio
+                    celda.font = font_header
                     celda.alignment = center
                     celda.border = border
 
@@ -6307,42 +9621,42 @@ class InspeccionService:
                     hoja.cell(
                         fila,
                         1
-                    ).value = (
+                    ).value = texto_seguro(
                         anomalia.titulo
-                        or ""
                     )
 
                     hoja.cell(
                         fila,
                         2
-                    ).value = (
+                    ).value = texto_seguro(
                         anomalia.descripcion
-                        or ""
                     )
 
-                    hoja.cell(
-                        fila,
-                        3
-                    ).value = (
+                    prioridad = texto_seguro(
                         getattr(
                             anomalia,
                             "prioridad",
                             ""
                         )
-                        or ""
                     )
 
-                    hoja.cell(
-                        fila,
-                        4
-                    ).value = (
+                    estado_anomalia = texto_seguro(
                         getattr(
                             anomalia,
                             "estado",
                             ""
                         )
-                        or ""
                     )
+
+                    hoja.cell(
+                        fila,
+                        3
+                    ).value = prioridad
+
+                    hoja.cell(
+                        fila,
+                        4
+                    ).value = estado_anomalia
 
                     fecha_anomalia = getattr(
                         anomalia,
@@ -6350,53 +9664,229 @@ class InspeccionService:
                         None
                     )
 
-                    if fecha_anomalia:
-
-                        hoja.cell(
-                            fila,
-                            5
-                        ).value = (
-                            fecha_anomalia.strftime(
-                                "%d/%m/%Y %H:%M"
-                            )
+                    hoja.cell(
+                        fila,
+                        5
+                    ).value = (
+                        fecha_anomalia.strftime(
+                            "%d/%m/%Y %H:%M"
                         )
+                        if fecha_anomalia
+                        else ""
+                    )
 
                     for col in range(
                         1,
                         6
                     ):
 
-                        hoja.cell(
+                        celda = hoja.cell(
                             fila,
                             col
-                        ).border = border
+                        )
+
+                        celda.border = border
+                        celda.alignment = left
+                        celda.font = font_normal
+
+                        if fila % 2 == 0:
+                            celda.fill = fill_rojo
+                        else:
+                            celda.fill = fill_blanco
+
+                    # ---------------------------------------------
+                    # PRIORIDAD
+                    # ---------------------------------------------
+
+                    if prioridad.upper() == "CRITICA":
+                        hoja.cell(
+                            fila,
+                            3
+                        ).fill = fill_rojo
 
                         hoja.cell(
                             fila,
-                            col
-                        ).alignment = left
+                            3
+                        ).font = Font(
+                            bold=True,
+                            color=ROJO
+                        )
+
+                    elif prioridad.upper() == "ALTA":
+                        hoja.cell(
+                            fila,
+                            3
+                        ).fill = fill_naranja
+
+                        hoja.cell(
+                            fila,
+                            3
+                        ).font = Font(
+                            bold=True,
+                            color=NARANJA
+                        )
 
                     fila += 1
 
-            # =================================================
-            # CONGELAR ENCABEZADOS
-            # =================================================
+            # =====================================================
+            # FIRMA / CIERRE
+            # =====================================================
 
-            hoja.freeze_panes = "A15"
+            fila += 2
 
-        # =====================================================
-        # HOJA PRINCIPAL
-        # =====================================================
+            aplicar_encabezado(
+                hoja,
+                fila,
+                5,
+                "CIERRE DE LA INSPECCIÓN"
+            )
 
-        ws.freeze_panes = "A5"
+            fila += 1
 
-        # =====================================================
-        # GUARDAR
-        # =====================================================
+            datos_cierre = [
+
+                (
+                    "FIRMA REGISTRADA",
+                    "SÍ"
+                    if inspeccion.firma_path
+                    else "NO"
+                ),
+
+                (
+                    "TRATAMIENTO DE DATOS",
+                    "ACEPTADO"
+                    if inspeccion.tratamiento_datos_aceptado
+                    else "NO REGISTRADO"
+                ),
+
+                (
+                    "CONFIRMACIÓN DE FIRMA",
+                    "CONFIRMADA"
+                    if inspeccion.confirma_firma
+                    else "NO REGISTRADA"
+                ),
+
+                (
+                    "FECHA CONFIRMACIÓN",
+                    (
+                        inspeccion.confirmacion_fecha.strftime(
+                            "%d/%m/%Y %H:%M"
+                        )
+                        if inspeccion.confirmacion_fecha
+                        else ""
+                    )
+                ),
+
+            ]
+
+            for campo, valor in datos_cierre:
+
+                hoja.cell(
+                    fila,
+                    1
+                ).value = campo
+
+                hoja.cell(
+                    fila,
+                    1
+                ).fill = fill_azul_claro
+                hoja.cell(
+                    fila,
+                    1
+                ).font = font_label
+                hoja.cell(
+                    fila,
+                    1
+                ).alignment = center
+                hoja.cell(
+                    fila,
+                    1
+                ).border = border
+
+                hoja.merge_cells(
+                    start_row=fila,
+                    start_column=2,
+                    end_row=fila,
+                    end_column=5
+                )
+
+                hoja.cell(
+                    fila,
+                    2
+                ).value = valor
+                hoja.cell(
+                    fila,
+                    2
+                ).font = font_normal
+                hoja.cell(
+                    fila,
+                    2
+                ).alignment = left
+
+                aplicar_borde_rango(
+                    hoja,
+                    f"B{fila}:E{fila}"
+                )
+
+                fila += 1
+
+            # =====================================================
+            # CONFIGURACIÓN IMPRESIÓN
+            # =====================================================
+
+            hoja.freeze_panes = "A14"
+
+            hoja.page_setup.orientation = "landscape"
+            hoja.page_setup.paperSize = (
+                hoja.PAPERSIZE_A4
+            )
+
+            hoja.page_setup.fitToWidth = 1
+            hoja.page_setup.fitToHeight = 0
+
+            hoja.sheet_properties.pageSetUpPr.fitToPage = True
+
+            hoja.page_margins.left = 0.25
+            hoja.page_margins.right = 0.25
+            hoja.page_margins.top = 0.40
+            hoja.page_margins.bottom = 0.40
+
+            hoja.oddFooter.center.text = (
+                "IntelliFeet · Inspección Preoperacional"
+            )
+
+            hoja.oddFooter.right.text = (
+                "Página &P de &N"
+            )
+
+        # =========================================================
+        # PROPIEDADES DEL ARCHIVO
+        # =========================================================
+
+        wb.properties.title = (
+            "Reporte de Inspecciones Preoperacionales"
+        )
+
+        wb.properties.subject = (
+            f"Reporte del periodo {mes:02d}/{anio}"
+        )
+
+        wb.properties.creator = "IntelliFeet"
+
+        wb.properties.description = (
+            "Reporte generado automáticamente por "
+            "el sistema IntelliFeet."
+        )
+
+        # =========================================================
+        # GUARDAR EXCEL
+        # =========================================================
 
         buffer = BytesIO()
 
-        wb.save(buffer)
+        wb.save(
+            buffer
+        )
 
         buffer.seek(0)
 

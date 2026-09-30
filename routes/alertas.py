@@ -6,7 +6,8 @@ from services.alertas_service import (
     obtener_todas_alertas,
     obtener_alertas_activas,
     obtener_estadisticas_alertas,
-    ejecutar_motor_alertas
+    ejecutar_motor_alertas,
+    resolver_documento_operador
 )
 from extensions import db
 
@@ -212,3 +213,60 @@ def resolver_documento(alerta_id):
     return jsonify({
         'message': 'Documento actualizado correctamente'
     })
+    
+    
+# =====================================================
+# RESOLVER DOCUMENTO OPERADOR
+# =====================================================
+
+@alertas_bp.route(
+    '/<int:alerta_id>/resolver-documento-operador',
+    methods=['POST']
+)
+def resolver_documento_operador_route(alerta_id):
+
+    usuario_id = request.form.get(
+        'usuario_id'
+    )
+
+    categoria = request.form.get(
+        'documento'
+    )
+
+    fecha_vencimiento = request.form.get(
+        'fecha_vencimiento'
+    )
+
+    archivo = request.files.get(
+        'archivo'
+    )
+
+    # =================================================
+    # VALIDAR USUARIO
+    # =================================================
+
+    if not usuario_id:
+
+        return jsonify({
+            'success': False,
+            'message': 'Usuario requerido'
+        }), 400
+
+    # =================================================
+    # LLAMAR SERVICIO
+    # =================================================
+
+    resultado, status = resolver_documento_operador(
+
+        alerta_id=alerta_id,
+
+        usuario_id=usuario_id,
+
+        categoria=categoria,
+
+        fecha_vencimiento=fecha_vencimiento,
+
+        archivo=archivo
+    )
+
+    return jsonify(resultado), status

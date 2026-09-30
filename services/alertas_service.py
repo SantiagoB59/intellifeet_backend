@@ -9,8 +9,14 @@ from models import (
     Maquinaria,
     MaquinariaPlanItem,
     MaquinariaDocumento,
-    UsuarioDocumento
+    UsuarioDocumento,
+    UsuarioDocumentoTipo
+    
 )
+
+import os
+import uuid
+
 
 from datetime import datetime, date
 
@@ -1229,19 +1235,23 @@ def generar_alertas_documentos_usuarios():
 
     for doc in documentos:
 
-        # -----------------------------------------
+        # =====================================================
         # SIN FECHA DE VENCIMIENTO
-        # -----------------------------------------
+        # =====================================================
 
         if not doc.fecha_vencimiento:
             continue
 
-        # -----------------------------------------
-        # VALIDAR TIPO DOCUMENTO
-        # -----------------------------------------
+        # =====================================================
+        # SIN TIPO DE DOCUMENTO
+        # =====================================================
 
         if not doc.documento_tipo:
             continue
+
+        # =====================================================
+        # CALCULAR DÍAS RESTANTES
+        # =====================================================
 
         dias = (
             doc.fecha_vencimiento - hoy
@@ -1249,9 +1259,10 @@ def generar_alertas_documentos_usuarios():
 
         categoria = doc.documento_tipo.nombre
 
-        # -----------------------------------------
-        # DOCUMENTO OK
-        # -----------------------------------------
+        # =====================================================
+        # DOCUMENTO VIGENTE
+        # Más de 15 días
+        # =====================================================
 
         if dias > 15:
 
@@ -1262,9 +1273,9 @@ def generar_alertas_documentos_usuarios():
 
             continue
 
-        # -----------------------------------------
+        # =====================================================
         # PRIORIDAD
-        # -----------------------------------------
+        # =====================================================
 
         prioridad = (
             'CRITICA'
@@ -1272,9 +1283,9 @@ def generar_alertas_documentos_usuarios():
             else 'MEDIA'
         )
 
-        # -----------------------------------------
-        # ESTADO
-        # -----------------------------------------
+        # =====================================================
+        # ESTADO DEL DOCUMENTO
+        # =====================================================
 
         estado = (
             'VENCIDO'
@@ -1282,17 +1293,16 @@ def generar_alertas_documentos_usuarios():
             else 'POR_VENCER'
         )
 
-        # -----------------------------------------
+        # =====================================================
         # METADATA
-        # -----------------------------------------
+        # =====================================================
 
         metadata = {
 
             'documento': categoria,
 
-            'fecha_vencimiento': (
-                doc.fecha_vencimiento.isoformat()
-            ),
+            'fecha_vencimiento':
+                doc.fecha_vencimiento.isoformat(),
 
             'dias_restantes': dias,
 
@@ -1301,9 +1311,9 @@ def generar_alertas_documentos_usuarios():
             'usuario_id': doc.usuario_id
         }
 
-        # -----------------------------------------
+        # =====================================================
         # MENSAJE
-        # -----------------------------------------
+        # =====================================================
 
         if dias > 1:
 
@@ -1330,9 +1340,9 @@ def generar_alertas_documentos_usuarios():
                 f"{abs(dias)} días"
             )
 
-        # -----------------------------------------
+        # =====================================================
         # CREAR / ACTUALIZAR ALERTA
-        # -----------------------------------------
+        # =====================================================
 
         crear_alerta(
 
@@ -1350,3 +1360,322 @@ def generar_alertas_documentos_usuarios():
 
             metadata=metadata
         )
+        
+
+# =========================================================
+# RESOLVER DOCUMENTO DE OPERADOR
+# =========================================================
+
+def resolver_documento_operador(
+    alerta_id,
+    usuario_id,
+    categoria,
+    fecha_vencimiento,
+    archivo
+):
+
+    # =====================================================
+    # BUSCAR ALERTA
+    # =====================================================
+
+    alerta = Alerta.query.get(alerta_id)
+
+    if not alerta:
+
+        return {
+            'success': False,
+            'message': 'Alerta no encontrada'
+        }, 404
+
+    # =====================================================
+    # VALIDAR TIPO DE ALERTA
+    # =====================================================
+
+    if alerta.tipo != 'DOCUMENTO':
+
+        return {
+            'success': False,
+            'message': 'La alerta no corresponde a un documento'
+        }, 400
+
+    # =====================================================
+    # VALIDAR USUARIO
+    # =====================================================
+
+    if not usuario_id:
+
+        return {
+            'success': False,
+            'message': 'El usuario del documento es requerido'
+        }, 400
+
+    try:
+
+        usuario_id = int(usuario_id)
+
+    except (TypeError, ValueError):
+
+        return {
+            'success': False,
+            'message': 'El usuario no es válido'
+        }, 400
+
+    # =====================================================
+    # VALIDAR QUE EL OPERADOR CORRESPONDA A LA ALERTA
+    # =====================================================
+
+    if alerta.usuario_id != usuario_id:
+
+        return {
+            'success': False,
+            'message': 'El operador no corresponde a la alerta'
+        }, 400
+
+    # =====================================================
+    # VALIDAR CATEGORÍA
+    # =====================================================
+
+    if not categoria:
+
+        return {
+            'success': False,
+            'message': 'El tipo de documento es requerido'
+        }, 400
+
+    categoria = categoria.strip()
+
+    # =====================================================
+    # VALIDAR FECHA
+    # =====================================================
+
+    if not fecha_vencimiento:
+
+        return {
+            'success': False,
+            'message': 'La fecha de vencimiento es requerida'
+        }, 400
+
+    try:
+
+        fecha = datetime.strptime(
+            fecha_vencimiento,
+            '%Y-%m-%d'
+        ).date()
+
+    except (ValueError, TypeError):
+
+        return {
+            'success': False,
+            'message': 'La fecha debe tener el formato YYYY-MM-DD'
+        }, 400
+
+    # =====================================================
+    # VALIDAR ARCHIVO
+    # =====================================================
+
+    if not archivo:
+
+        return {
+            'success': False,
+            'message': 'El archivo del documento es requerido'
+        }, 400
+
+    if not archivo.filename:
+
+        return {
+            'success': False,
+            'message': 'El archivo no tiene un nombre válido'
+        }, 400
+
+    # =====================================================
+    # BUSCAR DOCUMENTO DEL OPERADOR
+    #
+    # UsuarioDocumento -> UsuarioDocumentoTipo
+    #
+    # NO utilizamos DocumentoTipo porque este pertenece
+    # a los documentos de vehículos.
+    # =====================================================
+
+    documento = (
+        UsuarioDocumento.query
+        .filter(
+            UsuarioDocumento.usuario_id == usuario_id,
+            UsuarioDocumento.activo == True
+        )
+        .filter(
+            UsuarioDocumento.documento_tipo.has(
+                nombre=categoria
+            )
+        )
+        .first()
+    )
+
+    if not documento:
+
+        return {
+            'success': False,
+            'message': (
+                f'No se encontró el documento '
+                f'{categoria} para el operador'
+            )
+        }, 404
+
+    # =====================================================
+    # CREAR CARPETA DE DOCUMENTOS DE OPERADORES
+    # =====================================================
+
+    upload_folder = 'uploads/documentos_operadores'
+
+    os.makedirs(
+        upload_folder,
+        exist_ok=True
+    )
+
+    # =====================================================
+    # OBTENER EXTENSIÓN
+    # =====================================================
+
+    if '.' in archivo.filename:
+
+        ext = (
+            archivo.filename
+            .rsplit('.', 1)[1]
+            .lower()
+        )
+
+    else:
+
+        ext = 'bin'
+
+    # =====================================================
+    # GENERAR NOMBRE ÚNICO
+    # =====================================================
+
+    filename = f"{uuid.uuid4()}.{ext}"
+
+    path = os.path.join(
+        upload_folder,
+        filename
+    )
+
+    # =====================================================
+    # GUARDAR ARCHIVO
+    # =====================================================
+
+    try:
+
+        archivo.save(path)
+
+    except Exception as e:
+
+        db.session.rollback()
+
+        return {
+            'success': False,
+            'message': 'No fue posible guardar el archivo',
+            'error': str(e)
+        }, 500
+
+    # =====================================================
+    # ACTUALIZAR DOCUMENTO
+    # =====================================================
+
+    documento.fecha_vencimiento = fecha
+
+    documento.archivo_url = (
+        f"/uploads/documentos_operadores/{filename}"
+    )
+
+    documento.activo = True
+
+    # =====================================================
+    # RESOLVER ALERTA
+    # =====================================================
+
+    alerta.estado = 'RESUELTA'
+
+    alerta.fecha_resolucion = (
+        datetime.now(
+            ZoneInfo("America/Bogota")
+        )
+    )
+
+    # =====================================================
+    # ACTUALIZAR METADATA
+    # =====================================================
+
+    metadata = dict(
+        alerta.metadata_json or {}
+    )
+
+    metadata['fecha_vencimiento'] = (
+        fecha.isoformat()
+    )
+
+    metadata['dias_restantes'] = (
+        fecha - date.today()
+    ).days
+
+    metadata['estado'] = 'RESUELTA'
+
+    metadata['documento'] = categoria
+
+    metadata['usuario_id'] = usuario_id
+
+    alerta.metadata_json = metadata
+
+    # =====================================================
+    # GUARDAR CAMBIOS
+    # =====================================================
+
+    try:
+
+        db.session.commit()
+
+    except Exception as e:
+
+        db.session.rollback()
+
+        # Si la BD falla después de guardar el archivo,
+        # intentamos eliminar el archivo para no dejar
+        # archivos huérfanos.
+
+        try:
+
+            if os.path.exists(path):
+                os.remove(path)
+
+        except Exception:
+            pass
+
+        return {
+            'success': False,
+            'message': 'No fue posible actualizar el documento',
+            'error': str(e)
+        }, 500
+
+    # =====================================================
+    # NOTIFICAR SOCKET
+    # =====================================================
+
+    socketio.emit(
+        'alerta_resuelta',
+        alerta.to_dict()
+    )
+
+    # =====================================================
+    # RESPUESTA
+    # =====================================================
+
+    return {
+        'success': True,
+
+        'message': (
+            'Documento del operador '
+            'actualizado correctamente'
+        ),
+
+        'alerta': alerta.to_dict(),
+
+        'documento': documento.to_dict()
+    }, 200
