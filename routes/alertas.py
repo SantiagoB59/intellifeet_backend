@@ -14,7 +14,10 @@ from extensions import db
 from models import (
     Alerta,
     VehiculoDocumento,
-    DocumentoTipo
+    DocumentoTipo,
+    TipoVehiculoCampo,
+    VehiculoCampoValor
+    
 )
 
 import os
@@ -270,3 +273,140 @@ def resolver_documento_operador_route(alerta_id):
     )
 
     return jsonify(resultado), status
+
+
+
+# =====================================================
+# RESOLVER CAMPO DINÁMICO
+# =====================================================
+
+@alertas_bp.route(
+    '/<int:alerta_id>/resolver-campo-dinamico',
+    methods=['POST']
+)
+def resolver_campo_dinamico(alerta_id):
+
+    alerta = Alerta.query.get_or_404(alerta_id)
+
+    # =================================================
+    # DATOS
+    # =================================================
+
+    vehiculo_id = request.form.get('vehiculo_id')
+    campo_id = request.form.get('campo_id')
+    fecha_vencimiento = request.form.get('fecha_vencimiento')
+
+    # =================================================
+    # VALIDACIONES
+    # =================================================
+
+    if not vehiculo_id:
+        return jsonify({
+            'success': False,
+            'message': 'Vehículo requerido'
+        }), 400
+
+    if not campo_id:
+        return jsonify({
+            'success': False,
+            'message': 'Campo dinámico requerido'
+        }), 400
+
+    if not fecha_vencimiento:
+        return jsonify({
+            'success': False,
+            'message': 'Nueva fecha requerida'
+        }), 400
+
+    # =================================================
+    # VALIDAR ALERTA
+    # =================================================
+
+    if alerta.vehiculo_id != int(vehiculo_id):
+
+        return jsonify({
+            'success': False,
+            'message': 'El vehículo no corresponde a la alerta'
+        }), 400
+
+    # =================================================
+    # BUSCAR CAMPO
+    # =================================================
+
+    campo = TipoVehiculoCampo.query.get(
+        int(campo_id)
+    )
+
+    if not campo:
+
+        return jsonify({
+            'success': False,
+            'message': 'Campo dinámico no encontrado'
+        }), 404
+
+    # =================================================
+    # VALIDAR QUE SEA FECHA
+    # =================================================
+
+    if campo.tipo_dato != 'date':
+
+        return jsonify({
+            'success': False,
+            'message': 'El campo no es de tipo fecha'
+        }), 400
+
+    # =================================================
+    # BUSCAR VALOR
+    # =================================================
+
+    campo_valor = VehiculoCampoValor.query.filter_by(
+        vehiculo_id=int(vehiculo_id),
+        campo_id=campo.id
+    ).first()
+
+    if not campo_valor:
+
+        return jsonify({
+            'success': False,
+            'message': 'Valor del campo dinámico no encontrado'
+        }), 404
+
+    # =================================================
+    # ACTUALIZAR FECHA
+    # =================================================
+
+    campo_valor.valor = fecha_vencimiento
+
+    # =================================================
+    # RESOLVER ALERTA
+    # =================================================
+
+    alerta.estado = 'RESUELTA'
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    alerta.fecha_resolucion = datetime.now(
+        ZoneInfo('America/Bogota')
+    )
+
+    # =================================================
+    # GUARDAR
+    # =================================================
+
+    db.session.commit()
+
+    # =================================================
+    # RESPUESTA
+    # =================================================
+
+    return jsonify({
+        'success': True,
+        'message': 'Fecha actualizada y alerta resuelta',
+        'alerta': alerta.to_dict(),
+        'campo': {
+            'id': campo.id,
+            'nombre': campo.nombre_campo,
+            'valor': campo_valor.valor
+        }
+    }), 200

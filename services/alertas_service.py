@@ -10,7 +10,9 @@ from models import (
     MaquinariaPlanItem,
     MaquinariaDocumento,
     UsuarioDocumento,
-    UsuarioDocumentoTipo
+    UsuarioDocumentoTipo,
+    TipoVehiculoCampo,
+    VehiculoCampoValor,
     
 )
 
@@ -451,6 +453,240 @@ def resolver_alertas_documento(
 
 
 # =========================================================
+# RESOLVER ALERTAS CAMPOS DINÁMICOS
+# =========================================================
+
+def resolver_alertas_campo_dinamico(
+    vehiculo_id,
+    categoria
+):
+
+    alertas = Alerta.query.filter_by(
+        tipo='DOCUMENTO',
+        categoria=categoria,
+        vehiculo_id=vehiculo_id,
+        estado='ACTIVA'
+    ).all()
+
+    for alerta in alertas:
+
+        alerta.estado = 'RESUELTA'
+
+        alerta.fecha_resolucion = (
+            datetime.now(
+                ZoneInfo("America/Bogota")
+            )
+        )
+
+        socketio.emit(
+            'alerta_resuelta',
+            alerta.to_dict()
+        )
+
+    db.session.commit()
+
+    return True
+
+
+# =========================================================
+# ALERTAS CAMPOS DINÁMICOS DE VEHÍCULOS
+# =========================================================
+
+def generar_alertas_campos_dinamicos():
+
+    campos = (
+        VehiculoCampoValor.query
+        .join(
+            TipoVehiculoCampo,
+            VehiculoCampoValor.campo_id ==
+            TipoVehiculoCampo.id
+        )
+        .join(
+            Vehiculo,
+            VehiculoCampoValor.vehiculo_id ==
+            Vehiculo.id
+        )
+        .filter(
+            TipoVehiculoCampo.tipo_dato == 'date',
+            Vehiculo.activo == True
+        )
+        .all()
+    )
+
+    hoy = date.today()
+
+    for campo_valor in campos:
+
+        # =====================================================
+        # VALIDACIONES
+        # =====================================================
+
+        if not campo_valor.valor:
+            continue
+
+        campo = campo_valor.campo
+
+        if not campo:
+            continue
+
+        if campo.tipo_dato != 'date':
+            continue
+
+        vehiculo = Vehiculo.query.get(
+            campo_valor.vehiculo_id
+        )
+
+        if not vehiculo:
+            continue
+
+        # =====================================================
+        # CONVERTIR FECHA
+        # =====================================================
+
+        try:
+
+            fecha_vencimiento = datetime.strptime(
+                str(campo_valor.valor),
+                '%Y-%m-%d'
+            ).date()
+
+        except (ValueError, TypeError):
+
+            print(
+                f"[ALERTAS] Fecha inválida en campo "
+                f"{campo.nombre_campo}: "
+                f"{campo_valor.valor}"
+            )
+
+            continue
+
+        # =====================================================
+        # CALCULAR DÍAS
+        # =====================================================
+
+        dias = (
+            fecha_vencimiento - hoy
+        ).days
+
+        categoria = campo.nombre_campo
+
+        # =====================================================
+        # DOCUMENTO VIGENTE
+        # =====================================================
+
+        if dias > 15:
+
+            resolver_alertas_campo_dinamico(
+                vehiculo_id=vehiculo.id,
+                categoria=categoria
+            )
+
+            continue
+
+        # =====================================================
+        # PRIORIDAD
+        # =====================================================
+
+        prioridad = (
+            'CRITICA'
+            if dias <= 0
+            else 'MEDIA'
+        )
+
+        # =====================================================
+        # ESTADO
+        # =====================================================
+
+        estado = (
+            'VENCIDO'
+            if dias <= 0
+            else 'POR_VENCER'
+        )
+
+        # =====================================================
+        # METADATA
+        # =====================================================
+
+        metadata = {
+
+            'campo_id': campo.id,
+
+            'campo': campo.nombre_campo,
+
+            'fecha_vencimiento':
+                fecha_vencimiento.isoformat(),
+
+            'dias_restantes': dias,
+
+            'estado': estado,
+
+            'vehiculo_id': vehiculo.id,
+
+            'placa': vehiculo.placa
+
+        }
+
+        # =====================================================
+        # MENSAJE
+        # =====================================================
+
+        if dias > 1:
+
+            mensaje = (
+                f"{campo.nombre_campo} "
+                f"del vehículo {vehiculo.placa} "
+                f"vence en {dias} días"
+            )
+
+        elif dias == 1:
+
+            mensaje = (
+                f"{campo.nombre_campo} "
+                f"del vehículo {vehiculo.placa} "
+                f"vence mañana"
+            )
+
+        elif dias == 0:
+
+            mensaje = (
+                f"{campo.nombre_campo} "
+                f"del vehículo {vehiculo.placa} "
+                f"vence hoy"
+            )
+
+        else:
+
+            mensaje = (
+                f"{campo.nombre_campo} "
+                f"del vehículo {vehiculo.placa} "
+                f"venció hace {abs(dias)} días"
+            )
+
+        # =====================================================
+        # CREAR / ACTUALIZAR ALERTA
+        # =====================================================
+
+        crear_alerta(
+
+            tipo='DOCUMENTO',
+
+            categoria=categoria,
+
+            vehiculo_id=vehiculo.id,
+
+            titulo=(
+                f"{campo.nombre_campo} {estado}"
+            ),
+
+            mensaje=mensaje,
+
+            prioridad=prioridad,
+
+            origen='CAMPO_DINAMICO',
+
+            metadata=metadata
+        )
+# =========================================================
 # RESOLVER ALERTAS DOCUMENTO USUARIO
 # =========================================================
 
@@ -810,6 +1046,8 @@ def ejecutar_motor_alertas():
     generar_alertas_velocidad()
     
     generar_alertas_documentos_usuarios()
+    
+    generar_alertas_campos_dinamicos()
 
     # generar_alertas_apagado()
 

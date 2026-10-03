@@ -1094,40 +1094,6 @@ class Mantenimiento(db.Model):
             )
         }
 
-# ==========================
-# COMPONENTES VEHICULO
-# ==========================
-
-# class VehiculoComponente(db.Model):
-#     __tablename__ = "vehiculo_componentes"
-
-#     id = db.Column(db.Integer, primary_key=True)
-
-#     vehiculo_padre_id = db.Column(
-#         db.Integer,
-#         db.ForeignKey('vehiculos.id'),
-#         nullable=False
-#     )
-
-#     vehiculo_hijo_id = db.Column(
-#         db.Integer,
-#         db.ForeignKey('vehiculos.id'),
-#         nullable=False
-#     )
-
-#     tipo_componente = db.Column(
-#         db.String(50)
-#     )
-
-#     padre = db.relationship(
-#         'Vehiculo',
-#         foreign_keys=[vehiculo_padre_id]
-#     )
-
-#     hijo = db.relationship(
-#         'Vehiculo',
-#         foreign_keys=[vehiculo_hijo_id]
-#     )
 
 class TipoVehiculoCampo(db.Model):
     __tablename__ = "tipo_vehiculo_campos"
@@ -3356,4 +3322,234 @@ class UsuarioDocumento(db.Model):
             "archivo_url": self.archivo_url,
 
             "activo": self.activo
+        }
+        
+        
+       
+# ============================================================
+# CONTROL DIARIO
+# ============================================================
+
+class ControlDiario(db.Model):
+    __tablename__ = "control_diarios"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    # ========================================================
+    # FECHA DEL CONTROL
+    # ========================================================
+    fecha = db.Column(
+        db.Date,
+        nullable=False,
+        index=True
+    )
+
+    # ========================================================
+    # USUARIO QUE CARGÓ EL DOCUMENTO
+    # ========================================================
+    usuario_id = db.Column(
+        db.Integer,
+        db.ForeignKey("usuarios.id"),
+        nullable=False,
+        index=True
+    )
+
+    # ========================================================
+    # ACTIVO
+    # SOLO UNO DE LOS DOS DEBE EXISTIR
+    # ========================================================
+    vehiculo_id = db.Column(
+        db.Integer,
+        db.ForeignKey("vehiculos.id"),
+        nullable=True,
+        index=True
+    )
+
+    maquinaria_id = db.Column(
+        db.Integer,
+        db.ForeignKey("maquinaria.id"),
+        nullable=True,
+        index=True
+    )
+
+    # ========================================================
+    # ARCHIVO / EVIDENCIA
+    # ========================================================
+    archivo_path = db.Column(
+        db.String(500),
+        nullable=False
+    )
+
+    archivo_nombre = db.Column(
+        db.String(255),
+        nullable=False
+    )
+
+    archivo_tipo = db.Column(
+        db.String(50),
+        nullable=True
+    )
+
+    # ========================================================
+    # ESTADO
+    # ========================================================
+    estado = db.Column(
+        db.String(20),
+        nullable=False,
+        default="PENDIENTE",
+        index=True
+    )
+
+    # ========================================================
+    # OBSERVACIONES DEL OPERADOR
+    # ========================================================
+    observaciones = db.Column(
+        db.Text,
+        nullable=True
+    )
+
+    # ========================================================
+    # VALIDACIÓN
+    # ========================================================
+    validado_por = db.Column(
+        db.Integer,
+        db.ForeignKey("usuarios.id"),
+        nullable=True
+    )
+
+    validado_at = db.Column(
+        db.DateTime,
+        nullable=True
+    )
+
+    observacion_validacion = db.Column(
+        db.Text,
+        nullable=True
+    )
+
+    # ========================================================
+    # FECHAS DEL REGISTRO
+    # ========================================================
+    created_at = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(
+            ZoneInfo("America/Bogota")
+        ),
+        nullable=False
+    )
+
+    updated_at = db.Column(
+        db.DateTime,
+        default=lambda: datetime.now(
+            ZoneInfo("America/Bogota")
+        ),
+        onupdate=lambda: datetime.now(
+            ZoneInfo("America/Bogota")
+        )
+    )
+
+    # ========================================================
+    # RELACIONES
+    # ========================================================
+    usuario = db.relationship(
+        "Usuario",
+        foreign_keys=[usuario_id],
+        backref="controles_diarios"
+    )
+
+    vehiculo = db.relationship(
+        "Vehiculo",
+        backref="controles_diarios"
+    )
+
+    maquinaria = db.relationship(
+        "Maquinaria",
+        backref="controles_diarios"
+    )
+
+    validador = db.relationship(
+        "Usuario",
+        foreign_keys=[validado_por]
+    )
+
+    # ========================================================
+    # SERIALIZACIÓN
+    # ========================================================
+    def to_dict(self):
+
+        if self.vehiculo:
+            tipo_activo = "VEHICULO"
+            activo_id = self.vehiculo.id
+            activo_nombre = self.vehiculo.placa
+
+        elif self.maquinaria:
+            tipo_activo = "MAQUINARIA"
+            activo_id = self.maquinaria.id
+            activo_nombre = self.maquinaria.codigo
+
+        else:
+            tipo_activo = None
+            activo_id = None
+            activo_nombre = None
+
+        return {
+            "id": self.id,
+
+            "fecha": (
+                self.fecha.isoformat()
+                if self.fecha
+                else None
+            ),
+
+            "usuario_id": self.usuario_id,
+
+            "usuario": (
+                self.usuario.nombre
+                if self.usuario
+                else None
+            ),
+
+            "vehiculo_id": self.vehiculo_id,
+            "maquinaria_id": self.maquinaria_id,
+
+            "tipo_activo": tipo_activo,
+            "activo_id": activo_id,
+            "activo_nombre": activo_nombre,
+
+            "archivo_path": self.archivo_path,
+            "archivo_nombre": self.archivo_nombre,
+            "archivo_tipo": self.archivo_tipo,
+
+            "estado": self.estado,
+
+            "observaciones": self.observaciones,
+
+            "validado_por": self.validado_por,
+
+            "validador": (
+                self.validador.nombre
+                if self.validador
+                else None
+            ),
+
+            "validado_at": (
+                self.validado_at.isoformat()
+                if self.validado_at
+                else None
+            ),
+
+            "observacion_validacion":
+                self.observacion_validacion,
+
+            "created_at": (
+                self.created_at.isoformat()
+                if self.created_at
+                else None
+            ),
+
+            "updated_at": (
+                self.updated_at.isoformat()
+                if self.updated_at
+                else None
+            )
         }

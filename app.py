@@ -32,6 +32,7 @@ from routes.activo_operador import activo_operador_bp
 from routes.usuarios import usuarios_bp
 from routes.usuario_documento_routes import (usuario_documento_bp)
 from routes.analitica import analitica_bp
+from routes.control_diario import control_diario_bp
 # 🔥 sockets
 from sockets.socket_handler import socketio, iniciar_worker
 
@@ -67,6 +68,7 @@ def create_app():
     # ==============================
     os.makedirs('uploads/vehiculos', exist_ok=True)
     os.makedirs('uploads/inspecciones', exist_ok=True)
+    os.makedirs('uploads/controles_diarios',exist_ok=True)
 
     # ==============================
     # BLUEPRINTS
@@ -91,6 +93,7 @@ def create_app():
     app.register_blueprint(usuarios_bp, url_prefix="/api/usuarios")
     app.register_blueprint(usuario_documento_bp)
     app.register_blueprint(analitica_bp)
+    app.register_blueprint(control_diario_bp, url_prefix="/api/control-diario")
     # ==============================
     # SERVIR IMÁGENES
     # ==============================
