@@ -44,11 +44,13 @@ def login():
     if not user or not user.check_password(data.get('password')):
         return jsonify({"error": "Credenciales inválidas"}), 401
 
-    token = create_access_token(identity={
-        "id": user.id,
-        "username": user.username,
-        "rol": user.rol.nombre
-    })
+    token = create_access_token(
+        identity=str(user.id),
+        additional_claims={
+            "username": user.username,
+            "rol": user.rol.nombre
+        }
+    )
 
     # 👇 FIX
     if isinstance(token, bytes):

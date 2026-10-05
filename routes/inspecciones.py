@@ -6,10 +6,8 @@ from flask import (
     current_app
 )
 
-from flask_jwt_extended import (
-    jwt_required,
-    get_jwt_identity
-)
+from flask_jwt_extended import jwt_required
+from utils.auth import obtener_usuario_actual
 
 from services.inspecciones_service import InspeccionService
 
@@ -51,7 +49,7 @@ def mi_plantilla():
 
     try:
 
-        usuario = get_jwt_identity()
+        usuario = obtener_usuario_actual()
         usuario_id = usuario["id"]
 
         # =====================================================
@@ -261,7 +259,7 @@ def iniciar_inspeccion():
 
     try:
 
-        usuario = get_jwt_identity()
+        usuario = obtener_usuario_actual()
         usuario_id = usuario["id"]
 
         inspeccion = InspeccionService.iniciar_inspeccion(
@@ -548,7 +546,7 @@ def reportar_anomalia():
 
     try:
 
-        usuario = get_jwt_identity()
+        usuario = obtener_usuario_actual()
         print(usuario)
         print(type(usuario))
         anomalia = InspeccionService.reportar_anomalia(
