@@ -19,30 +19,89 @@ from datetime import date, timedelta
 vehiculos_bp = Blueprint('vehiculos', __name__)
 
 UPLOAD_FOLDER = 'uploads/vehiculos'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf'}
+
+DOCUMENTOS_FOLDER = 'uploads/vehiculos/documentos'
+
+ALLOWED_IMAGE_EXTENSIONS = {
+    'png',
+    'jpg',
+    'jpeg'
+}
+
+ALLOWED_DOCUMENT_EXTENSIONS = {
+    'pdf'
+}
 
 
 # ==========================
 # HELPERS
 # ==========================
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def allowed_image(filename):
+    return (
+        filename
+        and '.' in filename
+        and filename.rsplit('.', 1)[1].lower()
+        in ALLOWED_IMAGE_EXTENSIONS
+    )
+
+
+def allowed_pdf(filename):
+    return (
+        filename
+        and '.' in filename
+        and filename.rsplit('.', 1)[1].lower()
+        in ALLOWED_DOCUMENT_EXTENSIONS
+    )
 
 
 def guardar_imagen(file):
-    if not file or not allowed_file(file.filename):
+
+    if not file or not allowed_image(file.filename):
         return None
 
-    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    os.makedirs(
+        UPLOAD_FOLDER,
+        exist_ok=True
+    )
 
     ext = file.filename.rsplit('.', 1)[1].lower()
+
     filename = f"{uuid.uuid4()}.{ext}"
 
-    path = os.path.join(UPLOAD_FOLDER, filename)
+    path = os.path.join(
+        UPLOAD_FOLDER,
+        filename
+    )
+
     file.save(path)
 
     return f"/uploads/vehiculos/{filename}"
 
+
+def guardar_documento(file):
+
+    if not file:
+        return None
+
+    if not allowed_pdf(file.filename):
+        return None
+
+    os.makedirs(
+        DOCUMENTOS_FOLDER,
+        exist_ok=True
+    )
+
+    filename = f"{uuid.uuid4()}.pdf"
+
+    path = os.path.join(
+        DOCUMENTOS_FOLDER,
+        filename
+    )
+
+    file.save(path)
+
+    return f"/uploads/vehiculos/documentos/{filename}"
 
 # ==========================
 # LISTAR VEHÍCULOS
@@ -137,7 +196,8 @@ def obtener(placa):
 def crear():
     data = dict(request.form)
     file = request.files.get('foto')
-
+    tarjeta_registro_file = request.files.get('tarjeta_registro')
+    ficha_tecnica_file = request.files.get('ficha_tecnica')
     # ==========================
     # VALIDACIONES BÁSICAS
     # ==========================
@@ -205,6 +265,28 @@ def crear():
     if foto_url:
         v.foto_url = foto_url
 
+    # ==========================
+    # 📄 TARJETA DE REGISTRO
+    # ==========================
+
+    tarjeta_registro_url = guardar_documento(
+        tarjeta_registro_file
+    )
+
+    if tarjeta_registro_url:
+        v.tarjeta_registro = tarjeta_registro_url
+
+
+    # ==========================
+    # 📄 FICHA TÉCNICA
+    # ==========================
+
+    ficha_tecnica_url = guardar_documento(
+        ficha_tecnica_file
+    )
+
+    if ficha_tecnica_url:
+        v.ficha_tecnica = ficha_tecnica_url
     db.session.add(v)
     db.session.flush()
 
@@ -285,6 +367,8 @@ def actualizar(placa):
 
     data = dict(request.form)
     file = request.files.get('foto')
+    tarjeta_registro_file = request.files.get('tarjeta_registro')
+    ficha_tecnica_file = request.files.get('ficha_tecnica')
 
     # ==========================
     # TIPO
@@ -324,7 +408,50 @@ def actualizar(placa):
                 os.remove(old_path)
 
         v.foto_url = guardar_imagen(file)
+    # ==========================
+    # 📄 TARJETA DE REGISTRO
+    # ==========================
 
+    if tarjeta_registro_file:
+
+        if v.tarjeta_registro:
+            old_path = v.tarjeta_registro.replace(
+                '/uploads/',
+                'uploads/'
+            )
+
+            if os.path.exists(old_path):
+                os.remove(old_path)
+
+        nueva_tarjeta = guardar_documento(
+            tarjeta_registro_file
+        )
+
+        if nueva_tarjeta:
+            v.tarjeta_registro = nueva_tarjeta
+
+
+    # ==========================
+    # 📄 FICHA TÉCNICA
+    # ==========================
+
+    if ficha_tecnica_file:
+
+        if v.ficha_tecnica:
+            old_path = v.ficha_tecnica.replace(
+                '/uploads/',
+                'uploads/'
+            )
+
+            if os.path.exists(old_path):
+                os.remove(old_path)
+
+        nueva_ficha = guardar_documento(
+            ficha_tecnica_file
+        )
+
+        if nueva_ficha:
+            v.ficha_tecnica = nueva_ficha
     # ==========================
     # DOCUMENTOS
     # ==========================

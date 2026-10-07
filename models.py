@@ -136,7 +136,6 @@ class Vehiculo(db.Model):
 
     # ==========================
     # 👨‍✈️ CONDUCTOR BASE
-    # (Opcional)
     # ==========================
     conductor = db.Column(db.String(100))
     cc_conductor = db.Column(db.String(20))
@@ -164,10 +163,26 @@ class Vehiculo(db.Model):
     )
 
     # ==========================
-    # 🖼️ OTROS
+    # 🖼️ IMAGEN
     # ==========================
     foto_url = db.Column(db.String(255))
 
+    # ==========================
+    # 📄 DOCUMENTOS ADICIONALES
+    # ==========================
+    tarjeta_registro = db.Column(
+        db.String(255),
+        nullable=True
+    )
+
+    ficha_tecnica = db.Column(
+        db.String(255),
+        nullable=True
+    )
+
+    # ==========================
+    # 📝 OTROS
+    # ==========================
     notas = db.Column(db.Text)
 
     activo = db.Column(
@@ -187,6 +202,10 @@ class Vehiculo(db.Model):
         db.DateTime,
         onupdate=db.func.now()
     )
+
+    # ==========================
+    # 🚗 GPS / KILOMETRAJE
+    # ==========================
     km_gps_inicial = db.Column(
         db.Float,
         nullable=True
@@ -196,6 +215,7 @@ class Vehiculo(db.Model):
         db.Integer,
         nullable=True
     )
+
     requiere_verificacion_km = db.Column(
         db.Boolean,
         default=False
@@ -204,20 +224,21 @@ class Vehiculo(db.Model):
     fecha_proxima_verificacion = db.Column(
         db.Date
     )
+
     ultima_verificacion_km = db.Column(
         db.Date,
         nullable=True
     )
 
     # ==========================
-    # 📄 DOCUMENTOS
+    # 📄 DOCUMENTOS DINÁMICOS
     # ==========================
     documentos = db.relationship(
         'VehiculoDocumento',
         backref='vehiculo',
         lazy=True
     )
-    
+
     # ==========================
     # 📋 INSPECCIONES MENSUALES
     # =========================
@@ -227,7 +248,10 @@ class Vehiculo(db.Model):
         lazy=True,
         cascade='all, delete-orphan'
     )
-    # Inspecciones preoperacionales
+
+    # =========================
+    # 📋 INSPECCIONES PREOPERACIONALES
+    # =========================
     inspecciones_preoperacionales = db.relationship(
         "Inspeccion",
         back_populates="vehiculo",
@@ -261,7 +285,6 @@ class Vehiculo(db.Model):
             recorrido
         )
 
-
     @property
     def km_total(self):
         """
@@ -269,6 +292,9 @@ class Vehiculo(db.Model):
         """
         return self.km_estimado
 
+    # ==========================
+    # 📦 SERIALIZACIÓN
+    # ==========================
     def to_dict(self):
 
         return {
@@ -282,8 +308,7 @@ class Vehiculo(db.Model):
             # ==========================
             # 🚘 TIPO
             # ==========================
-            "tipo_vehiculo_id":
-                self.tipo_vehiculo_id,
+            "tipo_vehiculo_id": self.tipo_vehiculo_id,
 
             "tipo_vehiculo":
                 self.tipo_vehiculo.nombre
@@ -323,7 +348,7 @@ class Vehiculo(db.Model):
 
             "km_gps":
                 self.km_gps or 0,
-            
+
             "km_gps_inicial":
                 self.km_gps_inicial,
 
@@ -335,14 +360,16 @@ class Vehiculo(db.Model):
 
             "km_total":
                 self.km_total,
-            
-            "requiere_verificacion_km": self.requiere_verificacion_km,
+
+            "requiere_verificacion_km":
+                self.requiere_verificacion_km,
 
             "fecha_proxima_verificacion": (
                 str(self.fecha_proxima_verificacion)
                 if self.fecha_proxima_verificacion
                 else None
             ),
+
             "ultima_verificacion_km": (
                 str(self.ultima_verificacion_km)
                 if self.ultima_verificacion_km
@@ -354,10 +381,19 @@ class Vehiculo(db.Model):
             "estado": self.estado,
 
             # ==========================
-            # 🖼️ OTROS
+            # 🖼️ IMAGEN
             # ==========================
             "foto_url": self.foto_url,
 
+            # ==========================
+            # 📄 DOCUMENTOS ADICIONALES
+            # ==========================
+            "tarjeta_registro": self.tarjeta_registro,
+            "ficha_tecnica": self.ficha_tecnica,
+
+            # ==========================
+            # 📝 OTROS
+            # ==========================
             "notas": self.notas,
 
             "activo": self.activo,
@@ -367,11 +403,13 @@ class Vehiculo(db.Model):
             # ==========================
             "created_at":
                 str(self.created_at)
-                if self.created_at else None,
+                if self.created_at
+                else None,
 
             "updated_at":
                 str(self.updated_at)
-                if self.updated_at else None,
+                if self.updated_at
+                else None,
         }
 
 # DOCUMENTOS TIPO
@@ -1094,6 +1132,40 @@ class Mantenimiento(db.Model):
             )
         }
 
+# ==========================
+# COMPONENTES VEHICULO
+# ==========================
+
+# class VehiculoComponente(db.Model):
+#     __tablename__ = "vehiculo_componentes"
+
+#     id = db.Column(db.Integer, primary_key=True)
+
+#     vehiculo_padre_id = db.Column(
+#         db.Integer,
+#         db.ForeignKey('vehiculos.id'),
+#         nullable=False
+#     )
+
+#     vehiculo_hijo_id = db.Column(
+#         db.Integer,
+#         db.ForeignKey('vehiculos.id'),
+#         nullable=False
+#     )
+
+#     tipo_componente = db.Column(
+#         db.String(50)
+#     )
+
+#     padre = db.relationship(
+#         'Vehiculo',
+#         foreign_keys=[vehiculo_padre_id]
+#     )
+
+#     hijo = db.relationship(
+#         'Vehiculo',
+#         foreign_keys=[vehiculo_hijo_id]
+#     )
 
 class TipoVehiculoCampo(db.Model):
     __tablename__ = "tipo_vehiculo_campos"
@@ -1204,7 +1276,7 @@ class Maquinaria(db.Model):
 
     marca = db.Column(db.String(50))
     modelo = db.Column(db.String(50))
-
+    linea = db.Column(db.String(50))
     horometro_actual = db.Column(db.Float, default=0)
 
     operador = db.Column(db.String(100))
@@ -1213,6 +1285,8 @@ class Maquinaria(db.Model):
     notas = db.Column(db.Text)
     foto_url = db.Column(db.String(255))
     activo = db.Column(db.Boolean, default=True)
+    tarjeta_registro = db.Column(db.String(255))
+    ficha_tecnica = db.Column(db.String(255))
 
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
@@ -1258,10 +1332,11 @@ class Maquinaria(db.Model):
 
             "estado": self.estado,
             "notas": self.notas,
-
+            "linea": self.linea,
             "foto_url": self.foto_url,
             "activo": self.activo,
-
+            "tarjeta_registro": self.tarjeta_registro,
+            "ficha_tecnica": self.ficha_tecnica,
             "created_at": str(self.created_at)
         }
 
@@ -3324,8 +3399,6 @@ class UsuarioDocumento(db.Model):
             "activo": self.activo
         }
         
-        
-       
 # ============================================================
 # CONTROL DIARIO
 # ============================================================
