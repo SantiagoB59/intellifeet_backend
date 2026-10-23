@@ -14,7 +14,7 @@ from services.inspecciones_service import InspeccionService
 from extensions import db
 
 from werkzeug.utils import secure_filename
-
+from models import Inspeccion
 from datetime import datetime
 
 import os
@@ -739,75 +739,147 @@ def reporte_preoperacionales():
 # LIBRO DETALLADO
 # ==========================================================
 
+@jwt_required()
 @inspecciones_bp.route(
     "/reporte-preoperacionales-detalle/pdf",
     methods=["GET"]
 )
-@jwt_required()
 def libro_preoperacionales():
 
-    mes = int(request.args.get("mes"))
-    anio = int(request.args.get("anio"))
+    try:
 
-    vehiculo_id = request.args.get("vehiculo_id")
-    maquinaria_id = request.args.get("maquinaria_id")
+        # =====================================================
+        # PARÁMETROS
+        # =====================================================
 
-    # ======================================================
-    # VALIDAR ACTIVO
-    # ======================================================
+        mes = request.args.get(
+            "mes",
+            type=int
+        )
 
-    if not vehiculo_id and not maquinaria_id:
-        return jsonify({
-            "success": False,
-            "message": "Debe seleccionar un vehículo o una maquinaria."
-        }), 400
+        anio = request.args.get(
+            "anio",
+            type=int
+        )
 
-    if vehiculo_id and maquinaria_id:
-        return jsonify({
-            "success": False,
-            "message": "Seleccione solamente un activo."
-        }), 400
+        vehiculo_id = request.args.get(
+            "vehiculo_id",
+            type=int
+        )
 
-    # ======================================================
-    # VEHÍCULO
-    # ======================================================
+        maquinaria_id = request.args.get(
+            "maquinaria_id",
+            type=int
+        )
 
-    if vehiculo_id:
+        print("\n========================================")
+        print("REPORTE PREOPERACIONALES")
+        print("========================================")
+        print("Mes:", mes)
+        print("Año:", anio)
+        print("Vehículo:", vehiculo_id)
+        print("Maquinaria:", maquinaria_id)
+
+        # =====================================================
+        # VALIDAR MES
+        # =====================================================
+
+        if not mes:
+
+            return jsonify({
+                "success": False,
+                "error": "MES_REQUERIDO",
+                "message": "Debe seleccionar un mes."
+            }), 400
+
+        # =====================================================
+        # VALIDAR AÑO
+        # =====================================================
+
+        if not anio:
+
+            return jsonify({
+                "success": False,
+                "error": "ANIO_REQUERIDO",
+                "message": "Debe seleccionar un año."
+            }), 400
+
+        # =====================================================
+        # VALIDAR ACTIVO
+        # =====================================================
+
+        if not vehiculo_id and not maquinaria_id:
+
+            return jsonify({
+                "success": False,
+                "error": "ACTIVO_REQUERIDO",
+                "message": (
+                    "Debe seleccionar un vehículo "
+                    "o una maquinaria para generar "
+                    "el libro de preoperacionales."
+                )
+            }), 400
+
+        # =====================================================
+        # GENERAR PDF
+        # =====================================================
 
         pdf = InspeccionService.descargar_libro_preoperacionales(
-            int(vehiculo_id),
-            anio,
-            mes
+
+            vehiculo_id=vehiculo_id,
+
+            anio=anio,
+
+            mes=mes
+
         )
 
-        nombre_archivo = (
-            f"LIBRO_PREOPERACIONALES_VEHICULO_"
-            f"{vehiculo_id}_{mes}_{anio}.pdf"
+        # =====================================================
+        # RESPUESTA
+        # =====================================================
+
+        return send_file(
+
+            pdf,
+
+            mimetype="application/pdf",
+
+            as_attachment=True,
+
+            download_name=(
+                f"LIBRO_PREOPERACIONAL_"
+                f"{anio}_{mes:02d}.pdf"
+            )
+
         )
 
-    # ======================================================
-    # MAQUINARIA
-    # ======================================================
+    except Exception as e:
 
-    else:
+        import traceback
 
-        pdf = InspeccionService.descargar_libro_preoperacionales_maquinaria(
-            int(maquinaria_id),
-            anio,
-            mes
-        )
+        print("\n========================================")
+        print("ERROR GENERANDO REPORTE")
+        print("========================================")
 
-        nombre_archivo = (
-            f"LIBRO_PREOPERACIONALES_MAQUINARIA_"
-            f"{maquinaria_id}_{mes}_{anio}.pdf"
-        )
+        print(str(e))
 
-    return send_file(
-        pdf,
-        as_attachment=True,
-        mimetype="application/pdf",
-        download_name=nombre_archivo
-    )
+        traceback.print_exc()
+
+        return jsonify({
+
+            "success": False,
+
+            "error": "ERROR_REPORTE_PREOPERACIONAL",
+
+            "message": (
+                "No fue posible generar el "
+                "reporte de preoperacionales."
+            ),
+
+            "detalle": str(e)
+
+        }), 400
+
 
 # ==========================================================
 # LIBRO EXCEL
@@ -1316,4 +1388,232 @@ def reporte_preoperacionales_semanal():
         return jsonify({
             "success": False,
             "message": str(e)
+        }), 500
+        
+        
+
+# ==========================================================
+# ENDPOINTS MÓVILES - OFFLINE / SINCRONIZACIÓN
+# ==========================================================
+
+@inspecciones_bp.route(
+    "/movil/configuracion",
+    methods=["GET"]
+)
+@jwt_required()
+def configuracion_movil():
+
+    try:
+        usuario = obtener_usuario_actual()
+        usuario_id = usuario["id"]
+
+        data = InspeccionService.obtener_configuracion_movil(
+            usuario_id
+        )
+
+        return jsonify({
+            "success": True,
+            "data": data
+        }), 200
+
+    except Exception:
+        current_app.logger.exception(
+            "Error obteniendo configuración móvil"
+        )
+
+        return jsonify({
+            "success": False,
+            "message": (
+                "No fue posible obtener la configuración móvil."
+            )
+        }), 500  
+
+
+
+# ==========================================================
+# SINCRONIZAR INSPECCIÓN MÓVIL
+# ==========================================================
+
+@inspecciones_bp.route(
+    "/movil/sincronizar",
+    methods=["POST"]
+)
+@jwt_required()
+def sincronizar_movil():
+
+    try:
+        import json
+
+        usuario = obtener_usuario_actual()
+
+        payload = request.form.get("payload")
+
+        if not payload:
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Falta el campo payload de sincronización."
+                )
+            }), 400
+
+        try:
+            data = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            return jsonify({
+                "success": False,
+                "message": "El payload JSON no es válido."
+            }), 400
+
+        if not isinstance(data, dict):
+            return jsonify({
+                "success": False,
+                "message": "El payload debe ser un objeto JSON."
+            }), 400
+
+        resultado = InspeccionService.sincronizar_movil(
+            usuario_id=usuario["id"],
+            data=data,
+            archivos=request.files
+        )
+
+        return jsonify({
+            "success": True,
+            "data": resultado
+        }), 200
+
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 400
+
+    except Exception:
+        current_app.logger.exception(
+            "Error sincronizando inspección móvil"
+        )
+
+        return jsonify({
+            "success": False,
+            "message": (
+                "No fue posible sincronizar la inspección."
+            )
+        }), 500
+        
+        
+
+# ==========================================================
+# CONSULTAR ESTADO DE SINCRONIZACIÓN
+# ==========================================================
+
+@inspecciones_bp.route(
+    "/movil/sincronizacion/<string:uuid_sync>",
+    methods=["GET"]
+)
+@jwt_required()
+def consultar_sincronizacion(uuid_sync):
+
+    try:
+        usuario = obtener_usuario_actual()
+
+        inspeccion = (
+            InspeccionService.obtener_por_uuid_sync(
+                uuid_sync
+            )
+        )
+
+        if inspeccion is None:
+            return jsonify({
+                "success": True,
+                "data": {
+                    "existe": False,
+                    "uuid_sync": uuid_sync
+                }
+            }), 200
+
+        if inspeccion.usuario_id != usuario["id"]:
+            return jsonify({
+                "success": False,
+                "message": (
+                    "No tiene permiso para consultar "
+                    "esta inspección."
+                )
+            }), 403
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "existe": True,
+                "uuid_sync": inspeccion.uuid_sync,
+                "id": inspeccion.id,
+                "estado": inspeccion.estado,
+                "origen": inspeccion.origen
+            }
+        }), 200
+
+    except Exception:
+        current_app.logger.exception(
+            "Error consultando sincronización móvil"
+        )
+
+        return jsonify({
+            "success": False,
+            "message": (
+                "No fue posible consultar la sincronización."
+            )
+        }), 500 
+# ==========================================================
+# HISTORIAL DE INSPECCIONES MÓVILES
+# ==========================================================
+
+@inspecciones_bp.route(
+    "/movil/historial",
+    methods=["GET"]
+)
+@jwt_required()
+def historial_movil():
+    try:
+        from sqlalchemy.orm import joinedload, selectinload
+
+        usuario = obtener_usuario_actual()
+        usuario_id = usuario["id"]
+
+        inspecciones = (
+            Inspeccion.query
+            .options(
+                joinedload(Inspeccion.vehiculo),
+                joinedload(Inspeccion.maquinaria),
+                joinedload(Inspeccion.plantilla),
+                selectinload(Inspeccion.respuestas),
+            )
+            .filter(
+                Inspeccion.usuario_id == usuario_id
+            )
+            .order_by(
+                Inspeccion.hora_inicio.desc(),
+                Inspeccion.id.desc()
+            )
+            .all()
+        )
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "inspecciones": [
+                    inspeccion.to_dict()
+                    for inspeccion in inspecciones
+                ],
+                "total": len(inspecciones),
+            }
+        }), 200
+
+    except Exception:
+        current_app.logger.exception(
+            "Error obteniendo historial móvil"
+        )
+
+        return jsonify({
+            "success": False,
+            "message": (
+                "No fue posible obtener el historial de inspecciones."
+            )
         }), 500

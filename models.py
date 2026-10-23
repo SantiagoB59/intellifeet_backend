@@ -2617,6 +2617,22 @@ class Inspeccion(db.Model):
         db.Integer,
         primary_key=True
     )
+        # =====================================================
+    # SINCRONIZACIÓN MÓVIL OFFLINE
+    # =====================================================
+
+    uuid_sync = db.Column(
+        db.String(36),
+        unique=True,
+        nullable=True,
+        index=True
+    )
+
+    origen = db.Column(
+        db.String(20),
+        nullable=False,
+        default="WEB"
+    )
 
     plantilla_id = db.Column(
         db.Integer,
@@ -2783,6 +2799,8 @@ class Inspeccion(db.Model):
         return {
 
             "id": self.id,
+            "uuid_sync": self.uuid_sync,
+            "origen": self.origen,
 
             "plantilla_id": self.plantilla_id,
 
@@ -2925,7 +2943,13 @@ class InspeccionRespuesta(db.Model):
     __tablename__ = "inspeccion_respuestas"
 
     id = db.Column(db.Integer, primary_key=True)
-
+    
+    uuid_sync = db.Column(
+        db.String(36),
+        nullable=True,
+        unique=True,
+        index=False
+    )
     alerta_id = db.Column(
         db.Integer,
         db.ForeignKey("alertas.id")
@@ -2966,6 +2990,7 @@ class InspeccionRespuesta(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
+            "uuid_sync": self.uuid_sync,
             "alerta_id": self.alerta_id,
             "inspeccion_id": self.inspeccion_id,
             "item_id": self.item_id,
@@ -3110,7 +3135,12 @@ class InspeccionAnomalia(db.Model):
     __tablename__ = "anomalias"
 
     id = db.Column(db.Integer, primary_key=True)
-
+    uuid_sync = db.Column(
+        db.String(36),
+        nullable=True,
+        unique=True,
+        index=False
+    )
     inspeccion_id = db.Column(
         db.Integer,
         db.ForeignKey("inspecciones.id"),
@@ -3146,6 +3176,7 @@ class InspeccionAnomalia(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
+            "uuid_sync": self.uuid_sync,
             "inspeccion_id": self.inspeccion_id,
             "usuario_id": self.usuario_id,
             "titulo": self.titulo,

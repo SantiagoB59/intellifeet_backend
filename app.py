@@ -55,11 +55,24 @@ def create_app():
     # ==============================
     # CORS
     # ==============================
+    
+    # ==============================
+    # CORS
+    # ==============================
     CORS(
         app,
-        resources={r"/*": {"origins": "http://localhost:4200"}},
+        resources={
+            r"/*": {
+                "origins": [
+                    "http://localhost:4200",
+                    "http://localhost:50698",
+                    "http://127.0.0.1:50698"
+                ]
+            }
+        },
         supports_credentials=True,
-        allow_headers=["Content-Type", "Authorization"]
+        allow_headers=["Content-Type", "Authorization"],
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
     )
     
 

@@ -59,7 +59,9 @@ def crear_alerta(
     vehiculo_plan_item_id=None,
     maquinaria_plan_item_id=None,
 
-    metadata=None
+    metadata=None,
+    confirmar_transaccion=True
+    
 ):
 
     # =====================================================
@@ -103,27 +105,26 @@ def crear_alerta(
         )
 
         db.session.add(alerta)
-        db.session.commit()
 
-        socketio.emit(
-            "nueva_alerta",
-            alerta.to_dict()
-        )
+        if confirmar_transaccion:
+            db.session.commit()
+        else:
+            db.session.flush()
 
-        try:
-
-            if prioridad in ["CRITICA", "ALTA"]:
-
-                enviar_email_alerta(alerta)
-
-        except Exception as e:
-
-            print(
-                "Error enviando email alerta:",
-                e
+        if confirmar_transaccion:
+            socketio.emit(
+                "nueva_alerta",
+                alerta.to_dict()
             )
 
+            try:
+                if prioridad in ["CRITICA", "ALTA"]:
+                    enviar_email_alerta(alerta)
+            except Exception as e:
+                print("Error enviando email alerta:", e)
+
         return alerta
+
 
     # =====================================================
     # RESTO DE ALERTAS

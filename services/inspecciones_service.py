@@ -1533,7 +1533,1194 @@ class InspeccionService:
 
         return AnomaliaFoto.query.filter(AnomaliaFoto.anomalia_id == anomalia_id).all()
 
+# APLICACION MOVIL
 
+    
+    @staticmethod
+    def sincronizar_anomalia_movil(usuario_id, data, archivos):
+        import os
+        import uuid
+        import hashlib
+
+        from flask import current_app
+        from werkzeug.utils import secure_filename
+
+        archivos_guardados = []
+
+        def validar_uuid(valor, nombre):
+            try:
+                return str(uuid.UUID(str(valor or "").strip()))
+            except (ValueError, TypeError, AttributeError):
+                raise ValueError(f"El campo '{nombre}' debe contener un UUID válido.")
+
+        def guardar_fotografia(archivo):
+            if archivo is None or not getattr(archivo, "filename", None):
+                raise ValueError("La fotografía no es válida.")
+
+            contenido = archivo.read()
+
+            if not contenido:
+                raise ValueError("No se permite una fotografía vacía.")
+
+            max_bytes = current_app.config.get("MAX_CONTENT_LENGTH") or (
+                15 * 1024 * 1024
+            )
+
+            if len(contenido) > max_bytes:
+                raise ValueError("La fotografía supera el tamaño máximo permitido.")
+
+            hash_foto = hashlib.sha256(contenido).hexdigest()
+            archivo.seek(0)
+
+            nombre_original = secure_filename(archivo.filename) or "fotografia.jpg"
+            nombre_final = f"anomalia_{uuid.uuid4().hex}_{nombre_original}"
+
+            directorio = os.path.join(
+                current_app.root_path, "uploads", "anomalias"
+            )
+            os.makedirs(directorio, exist_ok=True)
+
+            ruta_absoluta = os.path.join(directorio, nombre_final)
+
+            with open(ruta_absoluta, "wb") as destino:
+                destino.write(contenido)
+
+            archivos_guardados.append(ruta_absoluta)
+
+            ruta_relativa = os.path.join(
+                "uploads", "anomalias", nombre_final
+            ).replace("\\", "/")
+
+            return ruta_relativa, hash_foto
+
+        try:
+            if not isinstance(data, dict):
+                raise ValueError("El payload debe ser un objeto JSON.")
+
+            uuid_inspeccion = validar_uuid(
+                data.get("uuid_inspeccion"), "uuid_inspeccion"
+            )
+            uuid_anomalia = validar_uuid(
+                data.get("uuid_sync"), "uuid_sync"
+            )
+
+            titulo = str(data.get("titulo") or "").strip()
+            descripcion = data.get("descripcion")
+            prioridad = str(data.get("prioridad") or "MEDIA").strip().upper()
+            fotos_data = data.get("fotos", [])
+
+            if not titulo:
+                raise ValueError("El título de la anomalía es obligatorio.")
+
+            if len(titulo) > 200:
+                raise ValueError("El título no puede superar los 200 caracteres.")
+
+            if descripcion is not None:
+                descripcion = str(descripcion).strip() or None
+
+            if prioridad not in {"BAJA", "MEDIA", "ALTA", "CRITICA"}:
+                raise ValueError("La prioridad de la anomalía no es válida.")
+
+            if not isinstance(fotos_data, list):
+                raise ValueError("Las fotos deben enviarse como una lista.")
+
+            # Buscar la inspección y comprobar la propiedad.
+            inspeccion = Inspeccion.query.filter_by(
+                uuid_sync=uuid_inspeccion
+            ).with_for_update().first()
+
+            if inspeccion is None:
+                raise ValueError(
+                    "La inspección todavía no existe en el servidor. "
+                    "Sincroniza primero su avance."
+                )
+
+            if inspeccion.usuario_id != usuario_id:
+                raise ValueError("La inspección no pertenece al usuario autenticado.")
+
+            if inspeccion.estado == "ANULADA":
+                raise ValueError("No se pueden registrar anomalías en una inspección anulada.")
+
+            # Buscar la anomalía por su UUID para soportar reintentos.
+            anomalia = InspeccionAnomalia.query.filter_by(
+                uuid_sync=uuid_anomalia
+            ).with_for_update().first()
+
+            ya_procesada = anomalia is not None
+
+            if anomalia:
+                if anomalia.inspeccion_id != inspeccion.id:
+                    raise ValueError(
+                        "El UUID de anomalía ya pertenece a otra inspección."
+                    )
+
+                if anomalia.usuario_id != usuario_id:
+                    raise ValueError(
+                        "El UUID de anomalía ya pertenece a otro usuario."
+                    )
+            else:
+                anomalia = InspeccionAnomalia(
+                    uuid_sync=uuid_anomalia,
+                    inspeccion_id=inspeccion.id,
+                    usuario_id=usuario_id,
+                    titulo=titulo,
+                    descripcion=descripcion,
+                    prioridad=prioridad,
+                    estado="ABIERTA",
+                )
+                db.session.add(anomalia)
+                db.session.flush()
+
+            # Calcular hashes de fotografías ya guardadas.
+            hashes_existentes = set()
+
+            fotos_existentes = AnomaliaFoto.query.filter_by(
+                anomalia_id=anomalia.id
+            ).all()
+
+            for foto_existente in fotos_existentes:
+                ruta = os.path.join(
+                    current_app.root_path, foto_existente.archivo
+                )
+
+                if not os.path.isfile(ruta):
+                    continue
+
+                try:
+                    with open(ruta, "rb") as imagen:
+                        hashes_existentes.add(
+                            hashlib.sha256(imagen.read()).hexdigest()
+                        )
+                except OSError:
+                    current_app.logger.exception(
+                        "No se pudo verificar una fotografía de anomalía."
+                    )
+
+            claves_recibidas = set()
+            fotos_guardadas = 0
+
+            for foto_data in fotos_data:
+                if not isinstance(foto_data, dict):
+                    raise ValueError("Una fotografía tiene un formato inválido.")
+
+                archivo_key = str(foto_data.get("archivo_key") or "").strip()
+
+                if not archivo_key:
+                    raise ValueError("Cada fotografía debe indicar archivo_key.")
+
+                if archivo_key in claves_recibidas:
+                    raise ValueError("Hay fotografías repetidas en el payload.")
+
+                claves_recibidas.add(archivo_key)
+
+                archivo = archivos.get(archivo_key)
+
+                if archivo is None:
+                    raise ValueError(
+                        f"No se recibió el archivo '{archivo_key}' indicado en el payload."
+                    )
+
+                contenido = archivo.read()
+
+                if not contenido:
+                    raise ValueError("Una fotografía de anomalía está vacía.")
+
+                hash_foto = hashlib.sha256(contenido).hexdigest()
+                archivo.seek(0)
+
+                hash_cliente = foto_data.get("hash_archivo")
+                if hash_cliente and str(hash_cliente).lower() != hash_foto:
+                    raise ValueError("El hash de una fotografía no coincide.")
+
+                if hash_foto in hashes_existentes:
+                    continue
+
+                ruta_relativa, hash_guardado = guardar_fotografia(archivo)
+
+                db.session.add(
+                    AnomaliaFoto(
+                        anomalia_id=anomalia.id,
+                        archivo=ruta_relativa,
+                    )
+                )
+
+                hashes_existentes.add(hash_guardado)
+                fotos_guardadas += 1
+
+            db.session.flush()
+
+            anomalia_id = anomalia.id
+
+            db.session.commit()
+
+            return {
+                "uuid_anomalia": uuid_anomalia,
+                "uuid_inspeccion": uuid_inspeccion,
+                "anomalia_id": anomalia_id,
+                "fotos_procesadas": fotos_guardadas,
+                "ya_procesada": ya_procesada,
+                "mensaje": "Anomalía sincronizada correctamente.",
+            }
+
+        except Exception:
+            db.session.rollback()
+
+            for ruta in archivos_guardados:
+                try:
+                    if os.path.isfile(ruta):
+                        os.remove(ruta)
+                except OSError:
+                    current_app.logger.exception(
+                        "No se pudo limpiar un archivo de anomalía."
+                    )
+
+            raise
+
+
+
+    @staticmethod
+    def obtener_configuracion_movil(usuario_id):
+        """
+        Devuelve los activos y las plantillas que el operador
+        necesita para realizar inspecciones sin conexión.
+        """
+
+        asignaciones = ActivoOperador.query.filter_by(
+            usuario_id=usuario_id, activo=True
+        ).all()
+
+        if not asignaciones:
+            raise ValueError("El operador no tiene activos asignados.")
+
+        activos = []
+        plantillas_ids = set()
+        advertencias = []
+
+        for asignacion in asignaciones:
+            activo = None
+
+            if asignacion.vehiculo_id:
+                vehiculo = db.session.get(Vehiculo, asignacion.vehiculo_id)
+
+                if vehiculo:
+                    activo = {
+                        "tipo": "VEHICULO",
+                        "id": vehiculo.id,
+                        "nombre": vehiculo.placa,
+                        "tipo_id": vehiculo.tipo_vehiculo_id,
+                        "lectura_actual": (
+                            float(vehiculo.km_actual)
+                            if vehiculo.km_actual is not None
+                            else None
+                        ),
+                    }
+
+            elif asignacion.maquinaria_id:
+                maquinaria = db.session.get(Maquinaria, asignacion.maquinaria_id)
+
+                if maquinaria:
+                    activo = {
+                        "tipo": "MAQUINARIA",
+                        "id": maquinaria.id,
+                        "nombre": maquinaria.codigo,
+                        "tipo_id": maquinaria.tipo_maquinaria_id,
+                        "lectura_actual": (
+                            float(maquinaria.horometro_actual)
+                            if maquinaria.horometro_actual is not None
+                            else None
+                        ),
+                    }
+
+            if not activo:
+                continue
+
+            # Se conserva el activo aunque todavía no tenga plantilla.
+            activos.append(activo)
+
+            try:
+                plantilla = InspeccionService.obtener_plantilla(
+                    activo["tipo"], activo["tipo_id"]
+                )
+
+                if plantilla:
+                    plantillas_ids.add(plantilla.id)
+                else:
+                    advertencias.append(
+                        {
+                            "tipo": activo["tipo"],
+                            "activo_id": activo["id"],
+                            "mensaje": (
+                                f"El activo {activo['nombre']} "
+                                "no tiene una plantilla disponible."
+                            ),
+                        }
+                    )
+
+            except ValueError:
+                advertencias.append(
+                    {
+                        "tipo": activo["tipo"],
+                        "activo_id": activo["id"],
+                        "mensaje": (
+                            f"El activo {activo['nombre']} "
+                            "no tiene una plantilla disponible."
+                        ),
+                    }
+                )
+
+        plantillas = []
+
+        for plantilla_id in sorted(plantillas_ids):
+            plantilla = (
+                InspeccionPlantilla.query.options(
+                    joinedload(InspeccionPlantilla.categorias).joinedload(
+                        InspeccionCategoria.items
+                    )
+                )
+                .filter_by(id=plantilla_id, activa=True)
+                .first()
+            )
+
+            if plantilla:
+                datos = plantilla.to_dict()
+
+                # Garantiza el orden de las categorías.
+                datos["categorias"] = sorted(
+                    datos.get("categorias", []),
+                    key=lambda categoria: (categoria.get("orden") or 0),
+                )
+
+                plantillas.append(datos)
+
+        return {
+            "usuario_id": usuario_id,
+            "activos": activos,
+            "plantillas": plantillas,
+            "advertencias": advertencias,
+            "descargado_en": (InspeccionService.obtener_fecha_actual().isoformat()),
+        }
+
+    @staticmethod
+    def obtener_por_uuid_sync(uuid_sync):
+        """
+        Busca una inspección usando su UUID de sincronización.
+        Devuelve None si todavía no existe.
+        """
+
+        if not uuid_sync:
+            raise ValueError("El UUID de sincronización es obligatorio.")
+
+        uuid_sync = str(uuid_sync).strip()
+
+        if not uuid_sync:
+            raise ValueError("El UUID de sincronización es inválido.")
+
+        return Inspeccion.query.filter_by(uuid_sync=uuid_sync).first()
+
+    @staticmethod
+    def sincronizar_movil(usuario_id, data, archivos):
+        """
+        Sincroniza una inspección móvil guardada sin conexión.
+
+        Recibe:
+        - data: diccionario JSON de la inspección.
+        - archivos: request.files de Flask.
+
+        Permite reintentar una sincronización sin duplicar
+        inspecciones, respuestas ni fotografías.
+
+        La inspección permanece EN_PROCESO. El cierre y la
+        validación final siguen realizándose por el flujo existente.
+        """
+
+        import os
+        import uuid
+        import hashlib
+
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from werkzeug.utils import secure_filename
+        from flask import current_app
+
+        archivos_guardados = []
+
+        # --------------------------------------------------
+        # FUNCIONES AUXILIARES
+        # --------------------------------------------------
+
+        def convertir_fecha(valor, nombre_campo):
+            if valor in (None, ""):
+                return None
+
+            try:
+                fecha = datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
+
+                if fecha.tzinfo is not None:
+                    fecha = fecha.astimezone(ZoneInfo("America/Bogota")).replace(
+                        tzinfo=None
+                    )
+
+                return fecha
+
+            except (TypeError, ValueError, OverflowError):
+                raise ValueError(f"La fecha '{nombre_campo}' no es válida.")
+
+        def convertir_numero(valor, nombre_campo):
+            if valor in (None, ""):
+                return None
+
+            try:
+                numero = float(valor)
+            except (TypeError, ValueError, OverflowError):
+                raise ValueError(f"El campo '{nombre_campo}' debe ser numérico.")
+
+            if not __import__("math").isfinite(numero):
+                raise ValueError(f"El campo '{nombre_campo}' no es válido.")
+
+            return numero
+
+        def validar_uuid(valor, nombre_campo, obligatorio=False):
+            valor = str(valor or "").strip()
+
+            if not valor:
+                if obligatorio:
+                    raise ValueError(f"El campo '{nombre_campo}' es obligatorio.")
+                return None
+
+            try:
+                return str(uuid.UUID(valor))
+            except (ValueError, TypeError, AttributeError):
+                raise ValueError(
+                    f"El campo '{nombre_campo}' no contiene " "un UUID válido."
+                )
+
+        def obtener_archivo(clave):
+            if not clave:
+                return None
+
+            archivo = archivos.get(clave)
+
+            if archivo is None:
+                raise ValueError(
+                    f"No se recibió el archivo '{clave}' " "indicado en el payload."
+                )
+
+            return archivo
+
+        def guardar_archivo(archivo, carpeta, prefijo):
+            if not archivo or not getattr(archivo, "filename", None):
+                raise ValueError("Se recibió una fotografía sin archivo válido.")
+
+            contenido = archivo.read()
+
+            if not contenido:
+                raise ValueError("No se permite sincronizar un archivo vacío.")
+
+            # Límite por archivo configurable desde Flask.
+            max_bytes = current_app.config.get("MAX_CONTENT_LENGTH") or (
+                15 * 1024 * 1024
+            )
+
+            if len(contenido) > max_bytes:
+                raise ValueError("La fotografía supera el tamaño máximo permitido.")
+
+            hash_calculado = hashlib.sha256(contenido).hexdigest()
+
+            archivo.seek(0)
+
+            nombre_original = secure_filename(archivo.filename) or "fotografia.jpg"
+
+            nombre_final = f"{prefijo}_{uuid.uuid4().hex}_" f"{nombre_original}"
+
+            directorio = os.path.join(current_app.root_path, "uploads", carpeta)
+
+            os.makedirs(directorio, exist_ok=True)
+
+            ruta_absoluta = os.path.join(directorio, nombre_final)
+
+            with open(ruta_absoluta, "wb") as destino:
+                destino.write(contenido)
+
+            archivos_guardados.append(ruta_absoluta)
+
+            ruta_relativa = os.path.join("uploads", carpeta, nombre_final).replace(
+                "\\", "/"
+            )
+
+            return {
+                "ruta": ruta_relativa,
+                "hash": hash_calculado,
+                "tamano": len(contenido),
+                "mime_type": getattr(archivo, "mimetype", None),
+            }
+
+        try:
+            # --------------------------------------------------
+            # 1. VALIDAR PAYLOAD
+            # --------------------------------------------------
+
+            if not isinstance(data, dict):
+                raise ValueError("El payload debe ser un objeto JSON.")
+
+            uuid_inspeccion = validar_uuid(
+                data.get("uuid_sync"), "uuid_sync", obligatorio=True
+            )
+
+            try:
+                plantilla_id = int(data.get("plantilla_id"))
+                if plantilla_id <= 0:
+                    raise ValueError()
+            except (TypeError, ValueError, OverflowError):
+                raise ValueError("La plantilla de la inspección no es válida.")
+
+            vehiculo_id = data.get("vehiculo_id")
+            maquinaria_id = data.get("maquinaria_id")
+
+            if bool(vehiculo_id) == bool(maquinaria_id):
+                raise ValueError(
+                    "Debes indicar exactamente un vehículo " "o una maquinaria."
+                )
+
+            try:
+                vehiculo_id = int(vehiculo_id) if vehiculo_id else None
+                maquinaria_id = int(maquinaria_id) if maquinaria_id else None
+
+                if (vehiculo_id is not None and vehiculo_id <= 0) or (
+                    maquinaria_id is not None and maquinaria_id <= 0
+                ):
+                    raise ValueError()
+
+            except (TypeError, ValueError, OverflowError):
+                raise ValueError("El identificador del activo no es válido.")
+
+            respuestas_data = data.get("respuestas", [])
+            anomalias_data = data.get("anomalias", [])
+
+            if not isinstance(respuestas_data, list):
+                raise ValueError("Las respuestas deben enviarse como una lista.")
+
+            if not isinstance(anomalias_data, list):
+                raise ValueError("Las anomalías deben enviarse como una lista.")
+
+            # --------------------------------------------------
+            # 2. VALIDAR ASIGNACIÓN DEL OPERADOR
+            # --------------------------------------------------
+
+            asignaciones = ActivoOperador.query.filter_by(
+                usuario_id=usuario_id, activo=True
+            ).all()
+
+            autorizado = any(
+                (vehiculo_id is not None and asignacion.vehiculo_id == vehiculo_id)
+                or (
+                    maquinaria_id is not None
+                    and asignacion.maquinaria_id == maquinaria_id
+                )
+                for asignacion in asignaciones
+            )
+
+            if not autorizado:
+                raise ValueError("No tienes asignado este vehículo o maquinaria.")
+
+            # --------------------------------------------------
+            # 3. VALIDAR ACTIVO Y PLANTILLA
+            # --------------------------------------------------
+
+            if vehiculo_id is not None:
+                activo = db.session.get(Vehiculo, vehiculo_id)
+
+                if not activo:
+                    raise ValueError("El vehículo indicado no existe.")
+
+                tipo_activo = "VEHICULO"
+                tipo_activo_id = activo.tipo_vehiculo_id
+
+            else:
+                activo = db.session.get(Maquinaria, maquinaria_id)
+
+                if not activo:
+                    raise ValueError("La maquinaria indicada no existe.")
+
+                tipo_activo = "MAQUINARIA"
+                tipo_activo_id = activo.tipo_maquinaria_id
+
+            plantilla = (
+                InspeccionPlantilla.query.options(
+                    joinedload(InspeccionPlantilla.categorias).joinedload(
+                        InspeccionCategoria.items
+                    )
+                )
+                .filter_by(id=plantilla_id, activa=True)
+                .first()
+            )
+
+            if not plantilla:
+                raise ValueError("La plantilla no existe o está inactiva.")
+
+            if plantilla.tipo_activo != tipo_activo:
+                raise ValueError("La plantilla no corresponde al tipo de activo.")
+
+            if tipo_activo == "VEHICULO":
+                if plantilla.tipo_vehiculo_id != tipo_activo_id:
+                    raise ValueError(
+                        "La plantilla no corresponde al tipo " "de vehículo asignado."
+                    )
+            elif plantilla.tipo_maquinaria_id != tipo_activo_id:
+                raise ValueError(
+                    "La plantilla no corresponde al tipo " "de maquinaria asignada."
+                )
+
+            # --------------------------------------------------
+            # 4. BUSCAR INSPECCIÓN Y CONTROLAR REINTENTOS
+            # --------------------------------------------------
+
+            inspeccion = (
+                Inspeccion.query.filter_by(uuid_sync=uuid_inspeccion)
+                .with_for_update()
+                .first()
+            )
+
+            inspeccion_nueva = inspeccion is None
+
+            if inspeccion:
+                if inspeccion.usuario_id != usuario_id:
+                    raise ValueError("El UUID pertenece a otro usuario.")
+
+                if inspeccion.plantilla_id != plantilla_id:
+                    raise ValueError("El UUID ya está asociado a otra plantilla.")
+
+                if (
+                    inspeccion.vehiculo_id != vehiculo_id
+                    or inspeccion.maquinaria_id != maquinaria_id
+                ):
+                    raise ValueError("El UUID ya está asociado a otro activo.")
+
+                if inspeccion.estado in (
+                    "FINALIZADA",
+                    "REVISADA",
+                    "ANULADA",
+                    "PENDIENTE_CIERRE",
+                ):
+                    return {
+                        "uuid_sync": inspeccion.uuid_sync,
+                        "inspeccion_id": inspeccion.id,
+                        "estado": inspeccion.estado,
+                        "ya_procesada": True,
+                        "mensaje": (
+                            "La inspección ya no admite "
+                            "modificaciones desde la sincronización."
+                        ),
+                    }
+
+                if inspeccion.estado != "EN_PROCESO":
+                    raise ValueError(
+                        "La inspección no está en un estado "
+                        "válido para sincronización."
+                    )
+
+            # --------------------------------------------------
+            # 5. CREAR INSPECCIÓN SI NO EXISTE
+            # --------------------------------------------------
+
+            if inspeccion_nueva:
+                hora_inicio = convertir_fecha(data.get("hora_inicio"), "hora_inicio")
+
+                if hora_inicio is None:
+                    hora_inicio = InspeccionService.obtener_fecha_actual()
+
+                inspeccion = Inspeccion(
+                    uuid_sync=uuid_inspeccion,
+                    origen="MOVIL",
+                    plantilla_id=plantilla_id,
+                    usuario_id=usuario_id,
+                    vehiculo_id=vehiculo_id,
+                    maquinaria_id=maquinaria_id,
+                    hora_inicio=hora_inicio,
+                    estado="EN_PROCESO",
+                    observaciones_generales=(data.get("observaciones_generales")),
+                )
+
+                db.session.add(inspeccion)
+                db.session.flush()
+
+            elif data.get("observaciones_generales") is not None:
+                inspeccion.observaciones_generales = data.get("observaciones_generales")
+
+            # --------------------------------------------------
+            # 6. GUARDAR O COMPLETAR LECTURA INICIAL
+            # --------------------------------------------------
+
+            lectura = convertir_numero(data.get("contador_inicial"), "contador_inicial")
+
+            if lectura is not None:
+                if lectura < 0:
+                    raise ValueError("La lectura inicial no puede ser negativa.")
+
+                if (
+                    inspeccion.contador_inicial is not None
+                    and float(inspeccion.contador_inicial) != lectura
+                ):
+                    # No se reemplaza silenciosamente una lectura
+                    # previa diferente en un reintento.
+                    raise ValueError(
+                        "La lectura inicial ya existe y es diferente "
+                        "de la enviada. Verifica la inspección."
+                    )
+
+                inspeccion.contador_inicial = lectura
+
+            clave_foto_inicial = data.get("foto_contador_inicial_key")
+
+            if clave_foto_inicial:
+                archivo_inicial = obtener_archivo(clave_foto_inicial)
+
+                # Si ya hay foto, se conserva para evitar duplicados
+                # en reintentos. Si falta, se permite completarla.
+                if not inspeccion.foto_contador_inicial:
+                    resultado_archivo = guardar_archivo(
+                        archivo_inicial, "inspecciones", "contador_inicial"
+                    )
+
+                    inspeccion.foto_contador_inicial = resultado_archivo["ruta"]
+
+            # --------------------------------------------------
+            # 7. VALIDAR ÍTEMS DE LA PLANTILLA
+            # --------------------------------------------------
+
+            ids_items_validos = {
+                item.id
+                for categoria in plantilla.categorias
+                for item in categoria.items
+                if item.activo
+            }
+
+            respuestas_procesadas = 0
+            fotos_procesadas = 0
+            items_recibidos = set()
+
+            # --------------------------------------------------
+            # 8. GUARDAR RESPUESTAS Y FOTOS
+            # --------------------------------------------------
+
+            for respuesta_data in respuestas_data:
+                if not isinstance(respuesta_data, dict):
+                    raise ValueError("Se encontró una respuesta con formato inválido.")
+
+                try:
+                    item_id = int(respuesta_data.get("item_id"))
+                except (TypeError, ValueError, OverflowError):
+                    raise ValueError("Una respuesta no contiene un item_id válido.")
+
+                if item_id not in ids_items_validos:
+                    raise ValueError(
+                        f"La pregunta {item_id} no pertenece " "a la plantilla activa."
+                    )
+
+                if item_id in items_recibidos:
+                    raise ValueError(
+                        f"La pregunta {item_id} está repetida " "en el payload."
+                    )
+
+                items_recibidos.add(item_id)
+
+                valor = respuesta_data.get("valor")
+
+                if valor is not None:
+                    valor = str(valor).strip()
+
+                observacion = respuesta_data.get("observacion")
+
+                if observacion is not None:
+                    observacion = str(observacion).strip()
+
+                uuid_respuesta = validar_uuid(
+                    respuesta_data.get("uuid_sync"), "uuid_sync de respuesta"
+                )
+
+                respuesta = None
+
+                if uuid_respuesta:
+                    respuesta = (
+                        InspeccionRespuesta.query.filter_by(uuid_sync=uuid_respuesta)
+                        .with_for_update()
+                        .first()
+                    )
+
+                    if respuesta:
+                        if respuesta.inspeccion_id != inspeccion.id:
+                            raise ValueError(
+                                "El UUID de respuesta ya pertenece "
+                                "a otra inspección."
+                            )
+
+                        if respuesta.item_id != item_id:
+                            raise ValueError(
+                                "El UUID de respuesta ya pertenece " "a otra pregunta."
+                            )
+
+                respuesta_por_item = (
+                    InspeccionRespuesta.query.filter_by(
+                        inspeccion_id=inspeccion.id, item_id=item_id
+                    )
+                    .with_for_update()
+                    .first()
+                )
+
+                if respuesta is None:
+                    respuesta = respuesta_por_item
+
+                elif (
+                    respuesta_por_item is not None
+                    and respuesta_por_item.id != respuesta.id
+                ):
+                    raise ValueError(
+                        "La pregunta ya tiene otra respuesta " "registrada."
+                    )
+
+                if respuesta is None:
+                    respuesta = InspeccionRespuesta(
+                        uuid_sync=uuid_respuesta,
+                        inspeccion_id=inspeccion.id,
+                        item_id=item_id,
+                        valor=valor,
+                        observacion=observacion,
+                    )
+                    db.session.add(respuesta)
+                    db.session.flush()
+
+                else:
+                    if (
+                        respuesta.uuid_sync
+                        and uuid_respuesta
+                        and respuesta.uuid_sync != uuid_respuesta
+                    ):
+                        raise ValueError(
+                            "La respuesta existente tiene un UUID "
+                            "diferente al enviado."
+                        )
+
+                    if uuid_respuesta and not respuesta.uuid_sync:
+                        respuesta.uuid_sync = uuid_respuesta
+
+                    respuesta.valor = valor
+                    respuesta.observacion = observacion
+
+                respuestas_procesadas += 1
+
+                # ----------------------------------------------
+                # 8.1 FOTOS DE RESPUESTA
+                # ----------------------------------------------
+
+                fotos_data = respuesta_data.get("fotos", [])
+
+                if not isinstance(fotos_data, list):
+                    raise ValueError("Las fotos de una respuesta deben ser una lista.")
+
+                for foto_data in fotos_data:
+                    if not isinstance(foto_data, dict):
+                        raise ValueError("Se encontró una foto con formato inválido.")
+
+                    archivo_key = foto_data.get("archivo_key")
+
+                    if not archivo_key:
+                        raise ValueError("Cada foto debe indicar su archivo_key.")
+
+                    archivo_foto = obtener_archivo(archivo_key)
+
+                    contenido = archivo_foto.read()
+
+                    if not contenido:
+                        raise ValueError("Una fotografía está vacía.")
+
+                    hash_calculado = hashlib.sha256(contenido).hexdigest()
+
+                    archivo_foto.seek(0)
+
+                    hash_cliente = foto_data.get("hash_archivo")
+
+                    if hash_cliente and str(hash_cliente).lower() != hash_calculado:
+                        raise ValueError("El hash de una fotografía no coincide.")
+
+                    foto_existente = InspeccionFoto.query.filter_by(
+                        respuesta_id=respuesta.id, hash_archivo=hash_calculado
+                    ).first()
+
+                    if foto_existente:
+                        continue
+
+                    resultado_archivo = guardar_archivo(
+                        archivo_foto, "inspecciones", "respuesta"
+                    )
+
+                    def decimal_o_none(valor_gps):
+                        if valor_gps in (None, ""):
+                            return None
+
+                        numero = convertir_numero(valor_gps, "metadato GPS")
+
+                        return numero
+
+                    latitud = decimal_o_none(foto_data.get("latitud"))
+                    longitud = decimal_o_none(foto_data.get("longitud"))
+                    precision_gps = decimal_o_none(foto_data.get("precision_gps"))
+
+                    if latitud is not None and not -90 <= latitud <= 90:
+                        raise ValueError("La latitud de una foto no es válida.")
+
+                    if longitud is not None and not -180 <= longitud <= 180:
+                        raise ValueError("La longitud de una foto no es válida.")
+
+                    foto = InspeccionFoto(
+                        respuesta_id=respuesta.id,
+                        archivo=resultado_archivo["ruta"],
+                        latitud=latitud,
+                        longitud=longitud,
+                        precision_gps=precision_gps,
+                        direccion=foto_data.get("direccion"),
+                        fecha_dispositivo=convertir_fecha(
+                            foto_data.get("fecha_dispositivo"), "fecha_dispositivo"
+                        ),
+                        fecha_servidor=(InspeccionService.obtener_fecha_actual()),
+                        watermark=bool(foto_data.get("watermark", True)),
+                        mime_type=resultado_archivo["mime_type"],
+                        tamano_bytes=resultado_archivo["tamano"],
+                        hash_archivo=hash_calculado,
+                    )
+
+                    db.session.add(foto)
+                    fotos_procesadas += 1
+
+            # --------------------------------------------------
+
+            # --------------------------------------------------
+            # 9. GUARDAR ANOMALÍAS Y SUS FOTOGRAFÍAS
+            # --------------------------------------------------
+
+            anomalias_procesadas = 0
+            fotos_anomalias_procesadas = 0
+
+            prioridades_validas = {"BAJA", "MEDIA", "ALTA", "CRITICA"}
+
+            for anomalia_data in anomalias_data:
+                if not isinstance(anomalia_data, dict):
+                    raise ValueError("Se encontró una anomalía con formato inválido.")
+
+                titulo = str(anomalia_data.get("titulo") or "").strip()
+
+                if not titulo:
+                    raise ValueError("Toda anomalía debe tener un título.")
+
+                if len(titulo) > 200:
+                    raise ValueError(
+                        "El título de una anomalía no puede "
+                        "superar los 200 caracteres."
+                    )
+
+                # Para las anomalías móviles exigimos un UUID estable.
+                uuid_anomalia = validar_uuid(
+                    anomalia_data.get("uuid_sync"),
+                    "uuid_sync de anomalía",
+                    obligatorio=True,
+                )
+
+                prioridad = (
+                    str(anomalia_data.get("prioridad") or "MEDIA").strip().upper()
+                )
+
+                if prioridad not in prioridades_validas:
+                    raise ValueError("La prioridad de una anomalía no es válida.")
+
+                fotos_data = anomalia_data.get("fotos", [])
+
+                if not isinstance(fotos_data, list):
+                    raise ValueError(
+                        "Las fotos de una anomalía deben enviarse " "como una lista."
+                    )
+
+                anomalia = (
+                    InspeccionAnomalia.query.filter_by(uuid_sync=uuid_anomalia)
+                    .with_for_update()
+                    .first()
+                )
+
+                if anomalia is not None:
+                    if anomalia.inspeccion_id != inspeccion.id:
+                        raise ValueError(
+                            "El UUID de anomalía ya pertenece " "a otra inspección."
+                        )
+
+                    if anomalia.usuario_id != usuario_id:
+                        raise ValueError(
+                            "El UUID de anomalía ya pertenece " "a otro usuario."
+                        )
+                else:
+                    anomalia = InspeccionAnomalia(
+                        uuid_sync=uuid_anomalia,
+                        inspeccion_id=inspeccion.id,
+                        usuario_id=usuario_id,
+                        titulo=titulo,
+                        descripcion=anomalia_data.get("descripcion"),
+                        prioridad=prioridad,
+                    )
+
+                    db.session.add(anomalia)
+                    db.session.flush()
+
+                    crear_alerta(
+                        tipo="ANOMALIA",
+                        categoria="INSPECCION",
+                        titulo=anomalia.titulo,
+                        mensaje=anomalia.descripcion or anomalia.titulo,
+                        prioridad=anomalia.prioridad,
+                        origen="MOVIL",
+                        vehiculo_id=inspeccion.vehiculo_id,
+                        maquinaria_id=inspeccion.maquinaria_id,
+                        usuario_id=usuario_id,
+                        metadata={
+                            "anomalia_id": anomalia.id,
+                            "inspeccion_id": inspeccion.id,
+                            "uuid_anomalia": uuid_anomalia,
+                            "uuid_inspeccion": uuid_inspeccion,
+                        },
+                        confirmar_transaccion=False,
+                    )
+
+                    anomalias_procesadas += 1
+
+                # Consultar las fotos existentes para evitar
+                # volver a guardar el mismo contenido al reintentar.
+                fotos_existentes = AnomaliaFoto.query.filter_by(
+                    anomalia_id=anomalia.id
+                ).all()
+
+                hashes_existentes = set()
+
+                for foto_existente in fotos_existentes:
+                    ruta_existente = os.path.join(
+                        current_app.root_path, foto_existente.archivo
+                    )
+
+                    if not os.path.isfile(ruta_existente):
+                        continue
+
+                    try:
+                        with open(ruta_existente, "rb") as archivo_existente:
+                            hash_existente = hashlib.sha256(
+                                archivo_existente.read()
+                            ).hexdigest()
+
+                        hashes_existentes.add(hash_existente)
+
+                    except OSError:
+                        current_app.logger.exception(
+                            "No se pudo verificar una foto de anomalía."
+                        )
+
+                claves_fotos_recibidas = set()
+
+                for foto_data in fotos_data:
+                    if not isinstance(foto_data, dict):
+                        raise ValueError(
+                            "Se encontró una foto de anomalía " "con formato inválido."
+                        )
+
+                    archivo_key = str(foto_data.get("archivo_key") or "").strip()
+
+                    if not archivo_key:
+                        raise ValueError(
+                            "Cada foto de anomalía debe indicar " "su archivo_key."
+                        )
+
+                    if archivo_key in claves_fotos_recibidas:
+                        raise ValueError(
+                            "Una foto de anomalía está repetida " "en el payload."
+                        )
+
+                    claves_fotos_recibidas.add(archivo_key)
+
+                    archivo_foto = obtener_archivo(archivo_key)
+
+                    contenido = archivo_foto.read()
+
+                    if not contenido:
+                        raise ValueError("Una foto de anomalía está vacía.")
+
+                    hash_foto = hashlib.sha256(contenido).hexdigest()
+
+                    archivo_foto.seek(0)
+
+                    hash_cliente = foto_data.get("hash_archivo")
+
+                    if hash_cliente and str(hash_cliente).lower() != hash_foto:
+                        raise ValueError(
+                            "El hash de una foto de anomalía " "no coincide."
+                        )
+
+                    # Si ya existe el mismo contenido para esta
+                    # anomalía, no se vuelve a guardar.
+                    if hash_foto in hashes_existentes:
+                        continue
+
+                    resultado_archivo = guardar_archivo(
+                        archivo_foto, "anomalias", "anomalia"
+                    )
+
+                    foto = AnomaliaFoto(
+                        anomalia_id=anomalia.id, archivo=resultado_archivo["ruta"]
+                    )
+
+                    db.session.add(foto)
+
+                    hashes_existentes.add(hash_foto)
+                    fotos_anomalias_procesadas += 1
+
+            # --------------------------------------------------
+            # 10. CONFIRMAR TRANSACCIÓN
+            # --------------------------------------------------
+
+            db.session.flush()
+
+            inspeccion_id = inspeccion.id
+            estado_final = inspeccion.estado
+
+            db.session.commit()
+
+            return {
+                "uuid_sync": uuid_inspeccion,
+                "inspeccion_id": inspeccion_id,
+                "estado": estado_final,
+                "ya_procesada": False,
+                "inspeccion_nueva": inspeccion_nueva,
+                "respuestas_procesadas": respuestas_procesadas,
+                "fotos_procesadas": fotos_procesadas,
+                "anomalias_procesadas": anomalias_procesadas,
+                "requiere_cierre_servidor": True,
+                "mensaje": (
+                    "Inspección sincronizada correctamente. "
+                    "Permanece en proceso hasta completar "
+                    "el flujo de validación y cierre."
+                ),
+            }
+
+        except Exception:
+            db.session.rollback()
+
+            # Eliminar únicamente los archivos creados por
+            # este intento de sincronización.
+            for ruta in archivos_guardados:
+                try:
+                    if os.path.isfile(ruta):
+                        os.remove(ruta)
+                except OSError:
+                    current_app.logger.exception(
+                        "No se pudo limpiar un archivo de sincronización."
+                    )
+
+            raise
+
+    
+
+# REPORTES PDF
     @staticmethod
     def descargar_pdf(inspeccion_id):
 
